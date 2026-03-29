@@ -1,0 +1,6 @@
+CPU Power: 12.5 W
+GPU Power: 8.25 W
+ANE Power: 1.5 W
+Thermal pressure: Nominal
+4321 WindowServer energy=4.2 gpu=12.0
+9876 Code energy=1.1 gpu=0.0

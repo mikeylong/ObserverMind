@@ -1,0 +1,3 @@
+import ObserverMind
+
+ObserverCLI.main()
