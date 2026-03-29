@@ -12,19 +12,12 @@ on:
 permissions:
   contents: read
 
-env:
-  SWIFT_VERSION: "6.3"
-
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-26
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Swift 6.3
-      uses: swift-actions/setup-swift@v2
-      with:
-        swift-version: ${{ env.SWIFT_VERSION }}
     - name: Show Swift version
       run: swift --version
     - name: Build
@@ -35,7 +28,7 @@ jobs:
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
-    runs-on: macos-latest
+    runs-on: macos-26
     concurrency:
       group: release-main
       cancel-in-progress: false
@@ -46,10 +39,6 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    - name: Set up Swift 6.3
-      uses: swift-actions/setup-swift@v2
-      with:
-        swift-version: ${{ env.SWIFT_VERSION }}
     - name: Compute next release tag
       id: version
       run: echo "tag=$(bash scripts/next_release_tag.sh)" >> "$GITHUB_OUTPUT"
