@@ -287,21 +287,7 @@ import Testing
 
 @Test func normalizedStateKeepsSelectedProcessVisibleInViewport() {
     var sample = makeSample()
-    sample.processes = (0..<18).map { index in
-        ProcessSnapshot(
-            pid: 1000 + index,
-            command: "proc-\(index)",
-            cpuPercent: Double(18 - index),
-            memoryBytes: Int64(1_000_000_000 + index),
-            cumulativeCPUTime: "00:0\(index).00",
-            networkBytesIn: nil,
-            networkBytesOut: nil,
-            networkInRateBytesPerSec: nil,
-            networkOutRateBytesPerSec: nil,
-            energyImpact: Double(index),
-            gpuTime: Double(index)
-        )
-    }
+    sample.processes = makeProcessFixtures(count: 18)
 
     let initialState = DashboardRenderState(
         view: .processes,
@@ -332,16 +318,7 @@ import Testing
 
 @Test func normalizedStateKeepsSelectedNetworkFlowVisibleAfterCommittedHeightChange() {
     var sample = makeSample()
-    sample.network.processes = (0..<18).map { index in
-        NetworkProcessSnapshot(
-            pid: 2000 + index,
-            command: "flow-\(index)",
-            bytesIn: Int64(index * 2_000),
-            bytesOut: Int64(index * 1_000),
-            inRateBytesPerSec: Double(18 - index) * 100,
-            outRateBytesPerSec: Double(18 - index) * 50
-        )
-    }
+    sample.network.processes = makeNetworkProcessFixtures(count: 18)
 
     let initialState = DashboardRenderState(
         view: .network,
@@ -375,6 +352,51 @@ private func assertAllLinesFit(_ output: String, width: Int) {
     for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
         #expect(line.count <= width)
     }
+}
+
+private func makeProcessFixtures(count: Int) -> [ProcessSnapshot] {
+    var fixtures: [ProcessSnapshot] = []
+    fixtures.reserveCapacity(count)
+
+    for index in 0..<count {
+        fixtures.append(
+            ProcessSnapshot(
+                pid: 1000 + index,
+                command: "proc-\(index)",
+                cpuPercent: Double(count - index),
+                memoryBytes: Int64(1_000_000_000 + index),
+                cumulativeCPUTime: "00:0\(index).00",
+                networkBytesIn: nil,
+                networkBytesOut: nil,
+                networkInRateBytesPerSec: nil,
+                networkOutRateBytesPerSec: nil,
+                energyImpact: Double(index),
+                gpuTime: Double(index)
+            )
+        )
+    }
+
+    return fixtures
+}
+
+private func makeNetworkProcessFixtures(count: Int) -> [NetworkProcessSnapshot] {
+    var fixtures: [NetworkProcessSnapshot] = []
+    fixtures.reserveCapacity(count)
+
+    for index in 0..<count {
+        fixtures.append(
+            NetworkProcessSnapshot(
+                pid: 2000 + index,
+                command: "flow-\(index)",
+                bytesIn: Int64(index * 2_000),
+                bytesOut: Int64(index * 1_000),
+                inRateBytesPerSec: Double(count - index) * 100,
+                outRateBytesPerSec: Double(count - index) * 50
+            )
+        )
+    }
+
+    return fixtures
 }
 
 private func renderedLineCount(_ output: String) -> Int {
