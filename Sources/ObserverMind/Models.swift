@@ -262,20 +262,36 @@ struct SampleRingBuffer: Sendable {
 
 extension Array where Element == ProcessSnapshot {
     func sorted(by key: ProcessSortKey) -> [ProcessSnapshot] {
-        sorted { lhs, rhs in
-            switch key {
-            case .cpu:
-                return (lhs.cpuPercent ?? -1) > (rhs.cpuPercent ?? -1)
-            case .memory:
-                return (lhs.memoryBytes ?? -1) > (rhs.memoryBytes ?? -1)
-            case .energy:
-                return (lhs.energyImpact ?? -1) > (rhs.energyImpact ?? -1)
-            case .gpu:
-                return (lhs.gpuTime ?? -1) > (rhs.gpuTime ?? -1)
-            case .network:
-                return ((lhs.networkInRateBytesPerSec ?? 0) + (lhs.networkOutRateBytesPerSec ?? 0)) >
-                    ((rhs.networkInRateBytesPerSec ?? 0) + (rhs.networkOutRateBytesPerSec ?? 0))
+        self.sorted { lhs, rhs in
+            let lhsMetric = lhs.sortMetric(for: key)
+            let rhsMetric = rhs.sortMetric(for: key)
+
+            if lhsMetric == rhsMetric {
+                if lhs.command == rhs.command {
+                    return lhs.pid < rhs.pid
+                }
+
+                return lhs.command.localizedStandardCompare(rhs.command) == .orderedAscending
             }
+
+            return lhsMetric > rhsMetric
+        }
+    }
+}
+
+private extension ProcessSnapshot {
+    func sortMetric(for key: ProcessSortKey) -> Double {
+        switch key {
+        case .cpu:
+            return cpuPercent ?? -1
+        case .memory:
+            return Double(memoryBytes ?? -1)
+        case .energy:
+            return energyImpact ?? -1
+        case .gpu:
+            return gpuTime ?? -1
+        case .network:
+            return (networkInRateBytesPerSec ?? 0) + (networkOutRateBytesPerSec ?? 0)
         }
     }
 }
