@@ -1,0 +1,22 @@
+name: Privacy Scan
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  privacy-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run privacy scan
+        shell: bash
+        run: bash scripts/privacy_scan.sh
