@@ -9,14 +9,64 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
+env:
+  SWIFT_VERSION: "6.3"
+
 jobs:
   build:
-
     runs-on: macos-latest
 
     steps:
     - uses: actions/checkout@v4
+    - name: Set up Swift 6.3
+      uses: swift-actions/setup-swift@v2
+      with:
+        swift-version: ${{ env.SWIFT_VERSION }}
+    - name: Show Swift version
+      run: swift --version
     - name: Build
       run: swift build -v
     - name: Run tests
       run: swift test -v
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: macos-latest
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Set up Swift 6.3
+      uses: swift-actions/setup-swift@v2
+      with:
+        swift-version: ${{ env.SWIFT_VERSION }}
+    - name: Compute next release tag
+      id: version
+      run: echo "tag=$(bash scripts/next_release_tag.sh)" >> "$GITHUB_OUTPUT"
+    - name: Build release binary
+      id: package
+      run: |
+        swift build -c release --product observer
+        BIN_PATH="$(swift build -c release --show-bin-path)"
+        ARCH="$(uname -m)"
+        ARTIFACT="observer-${{ steps.version.outputs.tag }}-macos-${ARCH}.zip"
+        ditto -c -k --sequesterRsrc --keepParent "${BIN_PATH}/observer" "${ARTIFACT}"
+        echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+    - name: Create GitHub release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release create "${{ steps.version.outputs.tag }}" "${{ steps.package.outputs.artifact }}" \
+          --title "${{ steps.version.outputs.tag }}" \
+          --target "${GITHUB_SHA}" \
+          --generate-notes
