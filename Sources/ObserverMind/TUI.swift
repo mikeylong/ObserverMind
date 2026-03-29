@@ -337,7 +337,8 @@ enum DashboardRenderer {
         history: [SampleEnvelope],
         state: DashboardRenderState,
         size: TerminalSize,
-        status: String
+        status: String,
+        appearanceProvider: DashboardAppearanceProvider = .live
     ) -> String {
         render(
             sample: sample,
@@ -345,7 +346,8 @@ enum DashboardRenderer {
             state: state,
             layoutSize: size,
             viewportSize: size,
-            status: status
+            status: status,
+            appearanceProvider: appearanceProvider
         )
     }
 
@@ -355,36 +357,41 @@ enum DashboardRenderer {
         state: DashboardRenderState,
         layoutSize: TerminalSize,
         viewportSize: TerminalSize,
-        status: String
+        status: String,
+        appearanceProvider: DashboardAppearanceProvider = .live
     ) -> String {
         let layout = layout(for: layoutSize, alertCount: sample?.alerts.count ?? 0)
+        let theme = DashboardThemeContext(theme: state.theme, appearanceProvider: appearanceProvider)
 
         if layout.mode == .fallback {
             return finalize(
-                lines: fallbackLines(size: layoutSize, status: status),
+                lines: fallbackLines(size: layoutSize, status: status, theme: theme),
                 width: viewportSize.width,
-                height: viewportSize.height
+                height: viewportSize.height,
+                theme: theme
             )
         }
 
         guard let sample else {
-            let header = standardHeader(sample: nil, layout: layout, state: state, status: status)
-            let body = loadingBodyLines(state: state, layout: layout)
+            let header = standardHeader(sample: nil, layout: layout, state: state, status: status, theme: theme)
+            let body = loadingBodyLines(state: state, layout: layout, theme: theme)
             return finalize(
                 lines: header + Array(body.prefix(layout.bodyHeight)),
                 width: viewportSize.width,
-                height: viewportSize.height
+                height: viewportSize.height,
+                theme: theme
             )
         }
 
-        let header = standardHeader(sample: sample, layout: layout, state: state, status: status)
-        let body = bodyLines(sample: sample, history: history, state: state, layout: layout)
-        let footer = footerLines(alerts: sample.alerts, layout: layout)
+        let header = standardHeader(sample: sample, layout: layout, state: state, status: status, theme: theme)
+        let body = bodyLines(sample: sample, history: history, state: state, layout: layout, theme: theme)
+        let footer = footerLines(alerts: sample.alerts, layout: layout, theme: theme)
 
         return finalize(
             lines: header + Array(body.prefix(layout.bodyHeight)) + footer,
             width: viewportSize.width,
-            height: viewportSize.height
+            height: viewportSize.height,
+            theme: theme
         )
     }
 
@@ -392,33 +399,35 @@ enum DashboardRenderer {
         sample: SampleEnvelope,
         history: [SampleEnvelope],
         state: DashboardRenderState,
-        layout: DashboardLayout
+        layout: DashboardLayout,
+        theme: DashboardThemeContext
     ) -> [String] {
         switch state.view {
         case .overview:
-            return overviewLines(sample: sample, history: history, layout: layout)
+            return overviewLines(sample: sample, history: history, layout: layout, theme: theme)
         case .processes:
-            return processLines(sample: sample, state: state, layout: layout)
+            return processLines(sample: sample, state: state, layout: layout, theme: theme)
         case .network:
-            return networkLines(sample: sample, state: state, layout: layout)
+            return networkLines(sample: sample, state: state, layout: layout, theme: theme)
         case .power:
-            return powerLines(sample: sample, history: history, layout: layout)
+            return powerLines(sample: sample, history: history, layout: layout, theme: theme)
         }
     }
 
     private static func loadingBodyLines(
         state: DashboardRenderState,
-        layout: DashboardLayout
+        layout: DashboardLayout,
+        theme: DashboardThemeContext
     ) -> [String] {
         switch state.view {
         case .overview:
-            return loadingOverviewLines(layout: layout)
+            return loadingOverviewLines(layout: layout, theme: theme)
         case .processes:
-            return loadingProcessLines(layout: layout)
+            return loadingProcessLines(layout: layout, theme: theme)
         case .network:
-            return loadingNetworkLines(layout: layout)
+            return loadingNetworkLines(layout: layout, theme: theme)
         case .power:
-            return loadingPowerLines(layout: layout)
+            return loadingPowerLines(layout: layout, theme: theme)
         }
     }
 
@@ -481,7 +490,8 @@ enum DashboardRenderer {
         sample: SampleEnvelope?,
         layout: DashboardLayout,
         state: DashboardRenderState,
-        status: String
+        status: String,
+        theme: DashboardThemeContext
     ) -> [String] {
         let banner: String
         if let sample {
@@ -494,63 +504,106 @@ enum DashboardRenderer {
             banner = "ObserverMind"
         }
 
-        let tabs = DashboardView.allCases
-            .map { view in
-                let label = layout.mode == .compact ? String(view.rawValue.prefix(4)) : view.rawValue
-                return view == state.view ? "[\(label)]" : " \(label) "
-            }
-            .joined(separator: " ")
-
         var lines = [
-            fitLine(banner, width: layout.width),
-            fitLine(tabs, width: layout.width),
-            fitLine("Status: \(status)", width: layout.width)
+            theme.segment(fitLine(banner, width: layout.width), foreground: theme.palette.panelTitle, bold: true),
+            fitLine(tabLine(layout: layout, selectedView: state.view, theme: theme), width: layout.width),
+            theme.segment(fitLine("Status: \(status)", width: layout.width), foreground: theme.palette.mutedText)
         ]
 
         if layout.showHelp {
-            lines.append(fitLine("Keys: 1-4 views | h/l cycle | j/k move | s sort | r refresh | q quit", width: layout.width))
+            lines.append(
+                theme.segment(
+                    fitLine("Keys: 1-4 views | h/l cycle | j/k move | s sort | r refresh | q quit", width: layout.width),
+                    foreground: theme.palette.mutedText,
+                    dim: true
+                )
+            )
         }
 
-        lines.append(String(repeating: "-", count: layout.width))
+        lines.append(theme.segment(String(repeating: "-", count: layout.width), foreground: theme.palette.divider))
         return lines
     }
 
-    private static func footerLines(alerts: [Alert], layout: DashboardLayout) -> [String] {
+    private static func tabLine(
+        layout: DashboardLayout,
+        selectedView: DashboardView,
+        theme: DashboardThemeContext
+    ) -> String {
+        let compact = layout.mode == .compact
+        return DashboardView.allCases.map { view in
+            let label = compact ? compactTabLabel(for: view) : view.rawValue
+            if view == selectedView {
+                return theme.segment(
+                    "[\(label)]",
+                    foreground: theme.palette.activeTabForeground,
+                    background: theme.palette.activeTabBackground,
+                    bold: true
+                )
+            }
+
+            return theme.segment(label, foreground: theme.palette.inactiveTabForeground)
+        }.joined(separator: "  ")
+    }
+
+    private static func compactTabLabel(for view: DashboardView) -> String {
+        switch view {
+        case .overview:
+            return "Over"
+        case .processes:
+            return "Proc"
+        case .network:
+            return "Netw"
+        case .power:
+            return "Powe"
+        }
+    }
+
+    private static func footerLines(alerts: [Alert], layout: DashboardLayout, theme: DashboardThemeContext) -> [String] {
         guard layout.alertLimit > 0 else {
             return []
         }
 
         var renderedAlerts = Array(alerts.prefix(layout.alertLimit)).map { alert in
-            fitLine("[\(alert.level.rawValue.uppercased())] \(alert.message)", width: layout.width)
+            theme.segment(
+                fitLine("[\(alert.level.rawValue.uppercased())] \(alert.message)", width: layout.width),
+                foreground: theme.accent(for: alert.level),
+                bold: alert.level == .critical
+            )
         }
 
         if renderedAlerts.isEmpty {
-            renderedAlerts.append(fitLine("[INFO] No active alerts.", width: layout.width))
+            renderedAlerts.append(
+                theme.segment(
+                    fitLine("[INFO] No active alerts.", width: layout.width),
+                    foreground: theme.palette.infoAccent
+                )
+            )
         }
 
         while renderedAlerts.count < layout.alertLimit {
             renderedAlerts.append("")
         }
 
-        return [String(repeating: "-", count: layout.width)] + renderedAlerts
+        return [theme.segment(String(repeating: "-", count: layout.width), foreground: theme.palette.divider)] + renderedAlerts
     }
 
     private static func overviewLines(
         sample: SampleEnvelope,
         history: [SampleEnvelope],
-        layout: DashboardLayout
+        layout: DashboardLayout,
+        theme: DashboardThemeContext
     ) -> [String] {
         switch layout.mode {
         case .compact:
-            return compactOverviewLines(sample: sample, history: history, layout: layout)
+            return compactOverviewLines(sample: sample, history: history, layout: layout, theme: theme)
         case .medium, .wide:
-            return gridOverviewLines(sample: sample, history: history, layout: layout)
+            return gridOverviewLines(sample: sample, history: history, layout: layout, theme: theme)
         case .fallback:
-            return fallbackLines(size: TerminalSize(width: layout.width, height: layout.height), status: "Loading")
+            return fallbackLines(size: TerminalSize(width: layout.width, height: layout.height), status: "Loading", theme: theme)
         }
     }
 
-    private static func loadingOverviewLines(layout: DashboardLayout) -> [String] {
+    private static func loadingOverviewLines(layout: DashboardLayout, theme: DashboardThemeContext) -> [String] {
         switch layout.mode {
         case .compact:
             let heights = distributeHeights(total: layout.bodyHeight, count: 3)
@@ -558,31 +611,35 @@ enum DashboardRenderer {
                 title: "Compute",
                 width: layout.width,
                 height: heights[0],
-                content: loadingPanelRows(
-                    primary: "Collecting CPU and GPU telemetry...",
-                    secondary: "The dashboard will stay in this layout.",
+                theme: theme,
+                content: loadingComputePanelRows(
                     width: max(layout.width - 2, 1),
-                    height: max(heights[0] - 2, 1)
+                    height: max(heights[0] - 2, 1),
+                    theme: theme
                 )
             ) + renderPanel(
                 title: "Memory",
                 width: layout.width,
                 height: heights[1],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting memory pressure and swap...",
                     secondary: "Charts will populate on the first sample.",
                     width: max(layout.width - 2, 1),
-                    height: max(heights[1] - 2, 1)
+                    height: max(heights[1] - 2, 1),
+                    theme: theme
                 )
             ) + renderPanel(
                 title: "I/O + Power",
                 width: layout.width,
                 height: heights[2],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting disk, network, battery, and thermal...",
                     secondary: "Live rates appear after the initial pass.",
                     width: max(layout.width - 2, 1),
-                    height: max(heights[2] - 2, 1)
+                    height: max(heights[2] - 2, 1),
+                    theme: theme
                 )
             )
         case .medium, .wide:
@@ -590,60 +647,67 @@ enum DashboardRenderer {
             let leftWidth = max((layout.width - 2) / 2, 24)
             let rightWidth = max(layout.width - leftWidth - 2, 24)
             let cpu = renderPanel(
-                title: "CPU",
+                title: "CPU / GPU",
                 width: leftWidth,
                 height: rowHeights[0],
-                content: loadingPanelRows(
-                    primary: "Collecting CPU and GPU telemetry...",
-                    secondary: "Trend history starts with the first sample.",
+                theme: theme,
+                content: loadingComputePanelRows(
                     width: max(leftWidth - 2, 1),
-                    height: max(rowHeights[0] - 2, 1)
+                    height: max(rowHeights[0] - 2, 1),
+                    theme: theme
                 )
             )
             let memory = renderPanel(
                 title: "Memory",
                 width: rightWidth,
                 height: rowHeights[0],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting memory pressure and swap...",
                     secondary: "Compression and free memory fill in next.",
                     width: max(rightWidth - 2, 1),
-                    height: max(rowHeights[0] - 2, 1)
+                    height: max(rowHeights[0] - 2, 1),
+                    theme: theme
                 )
             )
             let io = renderPanel(
                 title: "Network / Disk",
                 width: leftWidth,
                 height: rowHeights[1],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting disk and network throughput...",
                     secondary: "Per-process rates will appear shortly.",
                     width: max(leftWidth - 2, 1),
-                    height: max(rowHeights[1] - 2, 1)
+                    height: max(rowHeights[1] - 2, 1),
+                    theme: theme
                 )
             )
             let power = renderPanel(
                 title: "Power / Thermal",
                 width: rightWidth,
                 height: rowHeights[1],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting battery and thermal state...",
                     secondary: "Advanced metrics unlock after sampling.",
                     width: max(rightWidth - 2, 1),
-                    height: max(rowHeights[1] - 2, 1)
+                    height: max(rowHeights[1] - 2, 1),
+                    theme: theme
                 )
             )
             return combineColumns(left: cpu, right: memory, leftWidth: leftWidth, rightWidth: rightWidth)
                 + combineColumns(left: io, right: power, leftWidth: leftWidth, rightWidth: rightWidth)
         case .fallback:
-            return fallbackLines(size: TerminalSize(width: layout.width, height: layout.height), status: "Collecting initial sample...")
+            return fallbackLines(size: TerminalSize(width: layout.width, height: layout.height), status: "Collecting initial sample...", theme: theme)
         }
     }
 
     private static func compactOverviewLines(
         sample: SampleEnvelope,
         history: [SampleEnvelope],
-        layout: DashboardLayout
+        layout: DashboardLayout,
+        theme: DashboardThemeContext
     ) -> [String] {
         let heights = distributeHeights(total: layout.bodyHeight, count: 3)
         let compute = PanelSpec(title: "Compute", width: layout.width, height: heights[0])
@@ -654,24 +718,28 @@ enum DashboardRenderer {
             title: compute.title,
             width: compute.width,
             height: compute.height,
-            content: compactComputePanelRows(sample: sample, history: history, width: compute.innerWidth, height: compute.innerHeight)
+            theme: theme,
+            content: compactComputePanelRows(sample: sample, history: history, width: compute.innerWidth, height: compute.innerHeight, theme: theme)
         ) + renderPanel(
             title: memory.title,
             width: memory.width,
             height: memory.height,
-            content: compactMemoryPanelRows(sample: sample, history: history, width: memory.innerWidth, height: memory.innerHeight)
+            theme: theme,
+            content: compactMemoryPanelRows(sample: sample, history: history, width: memory.innerWidth, height: memory.innerHeight, theme: theme)
         ) + renderPanel(
             title: ioPower.title,
             width: ioPower.width,
             height: ioPower.height,
-            content: compactIOPowerPanelRows(sample: sample, history: history, width: ioPower.innerWidth, height: ioPower.innerHeight)
+            theme: theme,
+            content: compactIOPowerPanelRows(sample: sample, history: history, width: ioPower.innerWidth, height: ioPower.innerHeight, theme: theme)
         )
     }
 
     private static func gridOverviewLines(
         sample: SampleEnvelope,
         history: [SampleEnvelope],
-        layout: DashboardLayout
+        layout: DashboardLayout,
+        theme: DashboardThemeContext
     ) -> [String] {
         let rowHeights = distributeHeights(total: layout.bodyHeight, count: 2)
         let leftWidth = max((layout.width - 2) / 2, 24)
@@ -679,28 +747,32 @@ enum DashboardRenderer {
         let isWide = layout.mode == .wide
 
         let cpu = renderPanel(
-            title: "CPU",
+            title: "CPU / GPU",
             width: leftWidth,
             height: rowHeights[0],
-            content: cpuPanelRows(sample: sample, history: history, width: leftWidth - 2, height: rowHeights[0] - 2, isWide: isWide)
+            theme: theme,
+            content: splitComputePanelRows(sample: sample, history: history, width: leftWidth - 2, height: rowHeights[0] - 2, isWide: isWide, theme: theme)
         )
         let memory = renderPanel(
             title: "Memory",
             width: rightWidth,
             height: rowHeights[0],
-            content: memoryPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rowHeights[0] - 2, isWide: isWide)
+            theme: theme,
+            content: memoryPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rowHeights[0] - 2, isWide: isWide, theme: theme)
         )
         let io = renderPanel(
             title: "Network / Disk",
             width: leftWidth,
             height: rowHeights[1],
-            content: ioPanelRows(sample: sample, history: history, width: leftWidth - 2, height: rowHeights[1] - 2, isWide: isWide)
+            theme: theme,
+            content: ioPanelRows(sample: sample, history: history, width: leftWidth - 2, height: rowHeights[1] - 2, isWide: isWide, theme: theme)
         )
         let power = renderPanel(
             title: "Power / Thermal",
             width: rightWidth,
             height: rowHeights[1],
-            content: powerThermalPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rowHeights[1] - 2, isWide: isWide)
+            theme: theme,
+            content: powerThermalPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rowHeights[1] - 2, isWide: isWide, theme: theme)
         )
 
         return combineColumns(left: cpu, right: memory, leftWidth: leftWidth, rightWidth: rightWidth)
@@ -710,11 +782,15 @@ enum DashboardRenderer {
     private static func processLines(
         sample: SampleEnvelope,
         state: DashboardRenderState,
-        layout: DashboardLayout
+        layout: DashboardLayout,
+        theme: DashboardThemeContext
     ) -> [String] {
         let processes = sample.processes.sorted(by: state.processSort)
         guard processes.isEmpty == false else {
-            return ["Processes", "No process data available."]
+            return [
+                theme.segment("Processes", foreground: theme.palette.panelTitle, bold: true),
+                theme.segment("No process data available.", foreground: theme.palette.mutedText)
+            ]
         }
 
         let viewLayout = processViewLayout(for: layout)
@@ -726,25 +802,29 @@ enum DashboardRenderer {
             title: "Processes",
             width: viewLayout.listWidth,
             height: viewLayout.listHeight,
+            theme: theme,
             content: processListPanelRows(
                 processes: processes,
                 visible: visible,
                 selectedIndex: state.selectionIndex,
                 rangeStart: rangeStart,
                 sort: state.processSort,
-                width: max(viewLayout.listWidth - 2, 1)
+                width: max(viewLayout.listWidth - 2, 1),
+                theme: theme
             )
         )
         let detailPanel = renderPanel(
             title: "Selected Process",
             width: viewLayout.detailWidth,
             height: viewLayout.detailHeight,
+            theme: theme,
             content: processDetailPanelRows(
                 process: selected,
                 allProcesses: processes,
                 sample: sample,
                 width: max(viewLayout.detailWidth - 2, 1),
-                height: max(viewLayout.detailHeight - 2, 1)
+                height: max(viewLayout.detailHeight - 2, 1),
+                theme: theme
             )
         )
 
@@ -764,28 +844,32 @@ enum DashboardRenderer {
         return lines
     }
 
-    private static func loadingProcessLines(layout: DashboardLayout) -> [String] {
+    private static func loadingProcessLines(layout: DashboardLayout, theme: DashboardThemeContext) -> [String] {
         let viewLayout = processViewLayout(for: layout)
         let listPanel = renderPanel(
             title: "Processes",
             width: viewLayout.listWidth,
             height: viewLayout.listHeight,
+            theme: theme,
             content: loadingPanelRows(
                 primary: "Collecting top process list...",
                 secondary: "CPU, memory, energy, and network bars follow.",
                 width: max(viewLayout.listWidth - 2, 1),
-                height: max(viewLayout.listHeight - 2, 1)
+                height: max(viewLayout.listHeight - 2, 1),
+                theme: theme
             )
         )
         let detailPanel = renderPanel(
             title: "Selected Process",
             width: viewLayout.detailWidth,
             height: viewLayout.detailHeight,
+            theme: theme,
             content: loadingPanelRows(
                 primary: "Waiting for process detail...",
                 secondary: "Selection stays anchored after sampling.",
                 width: max(viewLayout.detailWidth - 2, 1),
-                height: max(viewLayout.detailHeight - 2, 1)
+                height: max(viewLayout.detailHeight - 2, 1),
+                theme: theme
             )
         )
 
@@ -808,11 +892,15 @@ enum DashboardRenderer {
     private static func networkLines(
         sample: SampleEnvelope,
         state: DashboardRenderState,
-        layout: DashboardLayout
+        layout: DashboardLayout,
+        theme: DashboardThemeContext
     ) -> [String] {
         let processes = sortedNetworkProcesses(from: sample)
         guard processes.isEmpty == false else {
-            return ["Network", "No network data available."]
+            return [
+                theme.segment("Network", foreground: theme.palette.panelTitle, bold: true),
+                theme.segment("No network data available.", foreground: theme.palette.mutedText)
+            ]
         }
 
         let viewLayout = networkViewLayout(for: layout)
@@ -824,25 +912,29 @@ enum DashboardRenderer {
             title: "Network",
             width: viewLayout.listWidth,
             height: viewLayout.listHeight,
+            theme: theme,
             content: networkListPanelRows(
                 sample: sample,
                 processes: processes,
                 visible: visible,
                 selectedIndex: state.selectionIndex,
                 rangeStart: rangeStart,
-                width: max(viewLayout.listWidth - 2, 1)
+                width: max(viewLayout.listWidth - 2, 1),
+                theme: theme
             )
         )
         let detailPanel = renderPanel(
             title: "Selected Flow",
             width: viewLayout.detailWidth,
             height: viewLayout.detailHeight,
+            theme: theme,
             content: networkDetailPanelRows(
                 process: selected,
                 allProcesses: processes,
                 sample: sample,
                 width: max(viewLayout.detailWidth - 2, 1),
-                height: max(viewLayout.detailHeight - 2, 1)
+                height: max(viewLayout.detailHeight - 2, 1),
+                theme: theme
             )
         )
 
@@ -862,28 +954,32 @@ enum DashboardRenderer {
         return lines
     }
 
-    private static func loadingNetworkLines(layout: DashboardLayout) -> [String] {
+    private static func loadingNetworkLines(layout: DashboardLayout, theme: DashboardThemeContext) -> [String] {
         let viewLayout = networkViewLayout(for: layout)
         let listPanel = renderPanel(
             title: "Network",
             width: viewLayout.listWidth,
             height: viewLayout.listHeight,
+            theme: theme,
             content: loadingPanelRows(
                 primary: "Collecting top network flows...",
                 secondary: "Inbound and outbound rates appear shortly.",
                 width: max(viewLayout.listWidth - 2, 1),
-                height: max(viewLayout.listHeight - 2, 1)
+                height: max(viewLayout.listHeight - 2, 1),
+                theme: theme
             )
         )
         let detailPanel = renderPanel(
             title: "Selected Flow",
             width: viewLayout.detailWidth,
             height: viewLayout.detailHeight,
+            theme: theme,
             content: loadingPanelRows(
                 primary: "Waiting for flow detail...",
                 secondary: "Per-flow gauges fill in after the first pass.",
                 width: max(viewLayout.detailWidth - 2, 1),
-                height: max(viewLayout.detailHeight - 2, 1)
+                height: max(viewLayout.detailHeight - 2, 1),
+                theme: theme
             )
         )
 
@@ -906,7 +1002,8 @@ enum DashboardRenderer {
     private static func powerLines(
         sample: SampleEnvelope,
         history: [SampleEnvelope],
-        layout: DashboardLayout
+        layout: DashboardLayout,
+        theme: DashboardThemeContext
     ) -> [String] {
         switch layout.mode {
         case .compact:
@@ -915,19 +1012,22 @@ enum DashboardRenderer {
                 title: "Power Trend",
                 width: layout.width,
                 height: heights[0],
-                content: powerTrendPanelRows(sample: sample, history: history, width: layout.width - 2, height: heights[0] - 2, isWide: false)
+                theme: theme,
+                content: powerTrendPanelRows(sample: sample, history: history, width: layout.width - 2, height: heights[0] - 2, isWide: false, theme: theme)
             )
             let battery = renderPanel(
                 title: "Battery / Thermal",
                 width: layout.width,
                 height: heights[1],
-                content: batteryThermalPanelRows(sample: sample, history: history, width: layout.width - 2, height: heights[1] - 2)
+                theme: theme,
+                content: batteryThermalPanelRows(sample: sample, history: history, width: layout.width - 2, height: heights[1] - 2, theme: theme)
             )
             let advanced = renderPanel(
                 title: "Advanced Metrics",
                 width: layout.width,
                 height: heights[2],
-                content: advancedMetricsPanelRows(sample: sample, width: layout.width - 2, height: heights[2] - 2)
+                theme: theme,
+                content: advancedMetricsPanelRows(sample: sample, width: layout.width - 2, height: heights[2] - 2, theme: theme)
             )
             return trend + battery + advanced
         case .medium, .wide:
@@ -938,26 +1038,29 @@ enum DashboardRenderer {
                 title: "Power Trend",
                 width: leftWidth,
                 height: layout.bodyHeight,
-                content: powerTrendPanelRows(sample: sample, history: history, width: leftWidth - 2, height: layout.bodyHeight - 2, isWide: layout.mode == .wide)
+                theme: theme,
+                content: powerTrendPanelRows(sample: sample, history: history, width: leftWidth - 2, height: layout.bodyHeight - 2, isWide: layout.mode == .wide, theme: theme)
             )
             let right = renderPanel(
                 title: "Battery / Thermal",
                 width: rightWidth,
                 height: rightHeights[0],
-                content: batteryThermalPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rightHeights[0] - 2)
+                theme: theme,
+                content: batteryThermalPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rightHeights[0] - 2, theme: theme)
             ) + renderPanel(
                 title: "Advanced Metrics",
                 width: rightWidth,
                 height: rightHeights[1],
-                content: advancedMetricsPanelRows(sample: sample, width: rightWidth - 2, height: rightHeights[1] - 2)
+                theme: theme,
+                content: advancedMetricsPanelRows(sample: sample, width: rightWidth - 2, height: rightHeights[1] - 2, theme: theme)
             )
             return combineColumns(left: left, right: right, leftWidth: leftWidth, rightWidth: rightWidth)
         case .fallback:
-            return fallbackLines(size: TerminalSize(width: layout.width, height: layout.height), status: "Loading")
+            return fallbackLines(size: TerminalSize(width: layout.width, height: layout.height), status: "Loading", theme: theme)
         }
     }
 
-    private static func loadingPowerLines(layout: DashboardLayout) -> [String] {
+    private static func loadingPowerLines(layout: DashboardLayout, theme: DashboardThemeContext) -> [String] {
         switch layout.mode {
         case .compact:
             let heights = distributeHeights(total: layout.bodyHeight, count: 3)
@@ -965,33 +1068,39 @@ enum DashboardRenderer {
                 title: "Power Trend",
                 width: layout.width,
                 height: heights[0],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting package, GPU, and ANE power...",
                     secondary: "Trend strips start on the first sample.",
                     width: max(layout.width - 2, 1),
-                    height: max(heights[0] - 2, 1)
+                    height: max(heights[0] - 2, 1),
+                    theme: theme
                 )
             )
             let battery = renderPanel(
                 title: "Battery / Thermal",
                 width: layout.width,
                 height: heights[1],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting battery and thermal state...",
                     secondary: "Current source and remaining time follow.",
                     width: max(layout.width - 2, 1),
-                    height: max(heights[1] - 2, 1)
+                    height: max(heights[1] - 2, 1),
+                    theme: theme
                 )
             )
             let advanced = renderPanel(
                 title: "Advanced Metrics",
                 width: layout.width,
                 height: heights[2],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Checking advanced power capability...",
                     secondary: "Locked or live status appears after sampling.",
                     width: max(layout.width - 2, 1),
-                    height: max(heights[2] - 2, 1)
+                    height: max(heights[2] - 2, 1),
+                    theme: theme
                 )
             )
             return trend + battery + advanced
@@ -1003,37 +1112,43 @@ enum DashboardRenderer {
                 title: "Power Trend",
                 width: leftWidth,
                 height: layout.bodyHeight,
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting package, GPU, and ANE power...",
                     secondary: "Trend history starts with the first sample.",
                     width: max(leftWidth - 2, 1),
-                    height: max(layout.bodyHeight - 2, 1)
+                    height: max(layout.bodyHeight - 2, 1),
+                    theme: theme
                 )
             )
             let right = renderPanel(
                 title: "Battery / Thermal",
                 width: rightWidth,
                 height: rightHeights[0],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting battery and thermal state...",
                     secondary: "Current levels will populate shortly.",
                     width: max(rightWidth - 2, 1),
-                    height: max(rightHeights[0] - 2, 1)
+                    height: max(rightHeights[0] - 2, 1),
+                    theme: theme
                 )
             ) + renderPanel(
                 title: "Advanced Metrics",
                 width: rightWidth,
                 height: rightHeights[1],
+                theme: theme,
                 content: loadingPanelRows(
                     primary: "Checking advanced power capability...",
                     secondary: "Privilege status follows after sampling.",
                     width: max(rightWidth - 2, 1),
-                    height: max(rightHeights[1] - 2, 1)
+                    height: max(rightHeights[1] - 2, 1),
+                    theme: theme
                 )
             )
             return combineColumns(left: left, right: right, leftWidth: leftWidth, rightWidth: rightWidth)
         case .fallback:
-            return fallbackLines(size: TerminalSize(width: layout.width, height: layout.height), status: "Collecting initial sample...")
+            return fallbackLines(size: TerminalSize(width: layout.width, height: layout.height), status: "Collecting initial sample...", theme: theme)
         }
     }
 
@@ -1122,14 +1237,89 @@ private func compactComputePanelRows(
     sample: SampleEnvelope,
     history: [SampleEnvelope],
     width: Int,
-    height: Int
+    height: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
-    [
-        fitLine("CPU \(formatPercent(sample.totalCPUPercent))  load \(formatNumber(sample.cpu.loadAverage1m))/\(formatNumber(sample.cpu.loadAverage5m))", width: width),
-        fitLine("Idle \(formatPercent(sample.cpu.idlePercent))  pkg \(formatWatts(sample.cpu.packagePowerWatts))", width: width),
-        fitLine("cpu " + trendStrip(values: history.map(\.totalCPUPercent), maxWidth: max(width - 4, 8)), width: width),
-        fitLine("gpu " + trendStrip(values: history.compactMap { $0.gpu.powerWatts }, maxWidth: max(width - 4, 8)), width: width)
-    ].prefix(height).map { $0 }
+    splitComputePanelRows(sample: sample, history: history, width: width, height: height, isWide: false, theme: theme)
+}
+
+private func loadingComputePanelRows(
+    width: Int,
+    height: Int,
+    theme: DashboardThemeContext
+) -> [String] {
+    let gap = 2
+    let canSplit = width >= 44
+
+    if canSplit {
+        let leftWidth = max((width - gap) / 2, 1)
+        let rightWidth = max(width - leftWidth - gap, 1)
+        let cpuRows = loadingPanelRows(
+            primary: "CPU",
+            secondary: "Collecting compute and load...",
+            width: leftWidth,
+            height: height,
+            theme: theme
+        )
+        let gpuRows = loadingPanelRows(
+            primary: "GPU",
+            secondary: "Checking live GPU telemetry...",
+            width: rightWidth,
+            height: height,
+            theme: theme
+        )
+        return Array(
+            combineColumns(left: cpuRows, right: gpuRows, leftWidth: leftWidth, rightWidth: rightWidth, gap: gap)
+                .prefix(height)
+        )
+    }
+
+    let heights = distributeHeights(total: max(height, 2), count: 2)
+    return Array(
+        loadingPanelRows(
+            primary: "CPU",
+            secondary: "Collecting compute and load...",
+            width: width,
+            height: heights[0],
+            theme: theme
+        )
+        + loadingPanelRows(
+            primary: "GPU",
+            secondary: "Checking live GPU telemetry...",
+            width: width,
+            height: heights[1],
+            theme: theme
+        )
+    .prefix(height))
+}
+
+private func splitComputePanelRows(
+    sample: SampleEnvelope,
+    history: [SampleEnvelope],
+    width: Int,
+    height: Int,
+    isWide: Bool,
+    theme: DashboardThemeContext
+) -> [String] {
+    let gap = 2
+    let canSplit = width >= 44
+
+    if canSplit {
+        let leftWidth = max((width - gap) / 2, 1)
+        let rightWidth = max(width - leftWidth - gap, 1)
+        let cpuRows = cpuPanelRows(sample: sample, history: history, width: leftWidth, height: height, isWide: isWide, theme: theme)
+        let gpuRows = gpuPanelRows(sample: sample, history: history, width: rightWidth, height: height, isWide: isWide, theme: theme)
+        return Array(
+            combineColumns(left: cpuRows, right: gpuRows, leftWidth: leftWidth, rightWidth: rightWidth, gap: gap)
+                .prefix(height)
+        )
+    }
+
+    let heights = distributeHeights(total: max(height, 2), count: 2)
+    return Array(
+        cpuPanelRows(sample: sample, history: history, width: width, height: heights[0], isWide: isWide, theme: theme)
+        + gpuPanelRows(sample: sample, history: history, width: width, height: heights[1], isWide: isWide, theme: theme)
+    .prefix(height))
 }
 
 private func combineColumns(left: [String], right: [String], leftWidth: Int, rightWidth: Int, gap: Int = 2) -> [String] {
@@ -1146,13 +1336,21 @@ private func compactMemoryPanelRows(
     sample: SampleEnvelope,
     history: [SampleEnvelope],
     width: Int,
-    height: Int
+    height: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
     [
         fitLine("Used \(formatBytes(sample.memory.usedBytes)) / \(formatBytes(sample.memory.totalBytes))", width: width),
         fitLine("Free \(formatBytes(sample.memory.freeBytes))  Wired \(formatBytes(sample.memory.wiredBytes))", width: width),
-        fitLine("mem " + trendStrip(values: history.compactMap { $0.memory.freePercent }, maxWidth: max(width - 4, 8)), width: width),
-        fitLine("Comp \(formatBytes(sample.memory.compressedBytes))  Swap \(formatBytes(sample.memory.swapOutBytes))", width: width)
+        fitLine(
+            theme.segment("mem ", foreground: theme.palette.memoryAccent, bold: true)
+                + trendStrip(values: history.compactMap { $0.memory.freePercent }, maxWidth: max(width - 4, 8), accent: theme.palette.memoryAccent, theme: theme),
+            width: width
+        ),
+        theme.segment(
+            fitLine("Comp \(formatBytes(sample.memory.compressedBytes))  Swap \(formatBytes(sample.memory.swapOutBytes))", width: width),
+            foreground: theme.palette.detailAccent
+        )
     ].prefix(height).map { $0 }
 }
 
@@ -1160,14 +1358,28 @@ private func compactIOPowerPanelRows(
     sample: SampleEnvelope,
     history: [SampleEnvelope],
     width: Int,
-    height: Int
+    height: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
     let totalNetwork = history.map { ($0.network.totalInRateBytesPerSec ?? 0) + ($0.network.totalOutRateBytesPerSec ?? 0) }
     return [
-        fitLine("Net \(formatRateBytes(sample.network.totalInRateBytesPerSec)) in  \(formatRateBytes(sample.network.totalOutRateBytesPerSec)) out", width: width),
-        fitLine("Disk \(formatRateMB(sample.disk.totalMBPerSec))  Batt \(formatOptionalPercent(sample.battery.percentage))", width: width),
-        fitLine("io  " + trendStrip(values: totalNetwork, maxWidth: max(width - 4, 8)), width: width),
-        fitLine("Thermal \(sample.thermal.state)  GPU \(fitLine(sample.gpu.model ?? "Unknown", width: max(width - 19, 8)))", width: width)
+        theme.segment(
+            fitLine("Net \(formatRateBytes(sample.network.totalInRateBytesPerSec)) in  \(formatRateBytes(sample.network.totalOutRateBytesPerSec)) out", width: width),
+            foreground: theme.palette.networkAccent
+        ),
+        theme.segment(
+            fitLine("Disk \(formatRateMB(sample.disk.totalMBPerSec))  Batt \(formatOptionalPercent(sample.battery.percentage))", width: width),
+            foreground: theme.palette.powerAccent
+        ),
+        fitLine(
+            theme.segment("io  ", foreground: theme.palette.networkAccent, bold: true)
+                + trendStrip(values: totalNetwork, maxWidth: max(width - 4, 8), accent: theme.palette.networkAccent, theme: theme),
+            width: width
+        ),
+        theme.segment(
+            fitLine("Thermal \(sample.thermal.state)  Rem \(sample.battery.timeRemaining ?? "n/a")", width: width),
+            foreground: theme.palette.detailAccent
+        )
     ].prefix(height).map { $0 }
 }
 
@@ -1176,14 +1388,51 @@ private func cpuPanelRows(
     history: [SampleEnvelope],
     width: Int,
     height: Int,
-    isWide: Bool
+    isWide: Bool,
+    theme: DashboardThemeContext
 ) -> [String] {
     let textRows = [
+        theme.segment(fitLine("CPU", width: width), foreground: theme.palette.cpuAccent, bold: true),
         fitLine("Total \(formatPercent(sample.totalCPUPercent))  Idle \(formatPercent(sample.cpu.idlePercent))", width: width),
-        fitLine("User \(formatPercent(sample.cpu.userPercent))  Sys \(formatPercent(sample.cpu.systemPercent))", width: width),
-        fitLine("Load \(formatNumber(sample.cpu.loadAverage1m)) / \(formatNumber(sample.cpu.loadAverage5m)) / \(formatNumber(sample.cpu.loadAverage15m))", width: width)
-    ] + (isWide ? [fitLine("Pkg \(formatWatts(sample.cpu.packagePowerWatts))", width: width)] : [])
-    return panelRowsWithChart(staticRows: textRows, chartValues: history.map(\.totalCPUPercent), width: width, height: height)
+        theme.segment(fitLine("Load \(formatNumber(sample.cpu.loadAverage1m)) / \(formatNumber(sample.cpu.loadAverage5m))", width: width), foreground: theme.palette.detailAccent),
+        theme.segment(fitLine("Pkg \(formatWatts(sample.cpu.packagePowerWatts))", width: width), foreground: theme.palette.cpuAccent)
+    ] + (isWide ? [theme.segment(fitLine("User \(formatPercent(sample.cpu.userPercent))  Sys \(formatPercent(sample.cpu.systemPercent))", width: width), foreground: theme.palette.mutedText)] : [])
+    return panelRowsWithChart(staticRows: textRows, chartValues: history.map(\.totalCPUPercent), width: width, height: height, accent: theme.palette.cpuAccent, theme: theme)
+}
+
+private func gpuPanelRows(
+    sample: SampleEnvelope,
+    history: [SampleEnvelope],
+    width: Int,
+    height: Int,
+    isWide: Bool,
+    theme: DashboardThemeContext
+) -> [String] {
+    let hasLiveMetrics = sample.capabilities.advancedPowerAvailable && sample.gpu.processMetricsLocked == false
+
+    if hasLiveMetrics {
+        let textRows = [
+            theme.segment(fitLine("GPU", width: width), foreground: theme.palette.gpuAccent, bold: true),
+            theme.segment(fitLine("Power \(formatWatts(sample.gpu.powerWatts))  ANE \(formatWatts(sample.gpu.anePowerWatts))", width: width), foreground: theme.palette.gpuAccent),
+            theme.segment(fitLine("Model \(sample.gpu.model ?? sample.host.gpuModel ?? "Unknown")", width: width), foreground: theme.palette.detailAccent),
+            fitLine("Cores \(sample.gpu.coreCount ?? sample.host.gpuCoreCount ?? 0)", width: width)
+        ] + (isWide ? [theme.segment(fitLine("Status available", width: width), foreground: theme.palette.infoAccent)] : [])
+        return panelRowsWithChart(staticRows: textRows, chartValues: history.compactMap { $0.gpu.powerWatts }, width: width, height: height, accent: theme.palette.gpuAccent, theme: theme)
+    }
+
+    var rows = [
+        theme.segment(fitLine("GPU", width: width), foreground: theme.palette.gpuAccent, bold: true),
+        theme.segment(fitLine("Status locked", width: width), foreground: theme.palette.warningAccent, bold: true),
+        theme.segment(fitLine("Model \(sample.gpu.model ?? sample.host.gpuModel ?? "Unknown")", width: width), foreground: theme.palette.detailAccent)
+    ]
+    if let cores = sample.gpu.coreCount ?? sample.host.gpuCoreCount {
+        rows.append(fitLine("Cores \(cores)", width: width))
+    }
+    let message = sample.gpu.lockReason ?? sample.capabilities.relaunchHint
+    rows.append(contentsOf: wrapText(message, width: width, maxLines: max(height - rows.count, 0)).map {
+        theme.segment($0, foreground: theme.palette.mutedText)
+    })
+    return Array(rows.prefix(height))
 }
 
 private func memoryPanelRows(
@@ -1191,14 +1440,15 @@ private func memoryPanelRows(
     history: [SampleEnvelope],
     width: Int,
     height: Int,
-    isWide: Bool
+    isWide: Bool,
+    theme: DashboardThemeContext
 ) -> [String] {
     let textRows = [
         fitLine("Used \(formatBytes(sample.memory.usedBytes)) / \(formatBytes(sample.memory.totalBytes))", width: width),
         fitLine("Free \(formatBytes(sample.memory.freeBytes))  \(formatOptionalPercent(sample.memory.freePercent))", width: width),
-        fitLine("Wired \(formatBytes(sample.memory.wiredBytes))  Compr \(formatBytes(sample.memory.compressedBytes))", width: width)
-    ] + (isWide ? [fitLine("Swap in \(formatBytes(sample.memory.swapInBytes))  out \(formatBytes(sample.memory.swapOutBytes))", width: width)] : [])
-    return panelRowsWithChart(staticRows: textRows, chartValues: history.compactMap { $0.memory.freePercent }, width: width, height: height)
+        theme.segment(fitLine("Wired \(formatBytes(sample.memory.wiredBytes))  Compr \(formatBytes(sample.memory.compressedBytes))", width: width), foreground: theme.palette.memoryAccent)
+    ] + (isWide ? [theme.segment(fitLine("Swap in \(formatBytes(sample.memory.swapInBytes))  out \(formatBytes(sample.memory.swapOutBytes))", width: width), foreground: theme.palette.detailAccent)] : [])
+    return panelRowsWithChart(staticRows: textRows, chartValues: history.compactMap { $0.memory.freePercent }, width: width, height: height, accent: theme.palette.memoryAccent, theme: theme)
 }
 
 private func ioPanelRows(
@@ -1206,18 +1456,19 @@ private func ioPanelRows(
     history: [SampleEnvelope],
     width: Int,
     height: Int,
-    isWide: Bool
+    isWide: Bool,
+    theme: DashboardThemeContext
 ) -> [String] {
     let networkHistory = history.map { ($0.network.totalInRateBytesPerSec ?? 0) + ($0.network.totalOutRateBytesPerSec ?? 0) }
     let diskHistory = history.map(\.disk.totalMBPerSec)
     var rows = [
-        fitLine("Net \(formatRateBytes(sample.network.totalInRateBytesPerSec)) in  \(formatRateBytes(sample.network.totalOutRateBytesPerSec)) out", width: width),
-        fitLine("Disk \(formatRateMB(sample.disk.readMBPerSec)) read  \(formatRateMB(sample.disk.writeMBPerSec)) write", width: width),
-        fitLine("net " + trendStrip(values: networkHistory, maxWidth: max(width - 4, 8)), width: width),
-        fitLine("io  " + trendStrip(values: diskHistory, maxWidth: max(width - 4, 8)), width: width)
+        theme.segment(fitLine("Net \(formatRateBytes(sample.network.totalInRateBytesPerSec)) in  \(formatRateBytes(sample.network.totalOutRateBytesPerSec)) out", width: width), foreground: theme.palette.networkAccent),
+        theme.segment(fitLine("Disk \(formatRateMB(sample.disk.readMBPerSec)) read  \(formatRateMB(sample.disk.writeMBPerSec)) write", width: width), foreground: theme.palette.powerAccent),
+        fitLine(theme.segment("net ", foreground: theme.palette.networkAccent, bold: true) + trendStrip(values: networkHistory, maxWidth: max(width - 4, 8), accent: theme.palette.networkAccent, theme: theme), width: width),
+        fitLine(theme.segment("io  ", foreground: theme.palette.powerAccent, bold: true) + trendStrip(values: diskHistory, maxWidth: max(width - 4, 8), accent: theme.palette.powerAccent, theme: theme), width: width)
     ]
     if isWide {
-        rows.append(fitLine("Totals \(formatBytes(sample.network.totalBytesIn)) in / \(formatBytes(sample.network.totalBytesOut)) out", width: width))
+        rows.append(theme.segment(fitLine("Totals \(formatBytes(sample.network.totalBytesIn)) in / \(formatBytes(sample.network.totalBytesOut)) out", width: width), foreground: theme.palette.detailAccent))
     }
     return Array(rows.prefix(height))
 }
@@ -1227,16 +1478,18 @@ private func powerThermalPanelRows(
     history: [SampleEnvelope],
     width: Int,
     height: Int,
-    isWide: Bool
+    isWide: Bool,
+    theme: DashboardThemeContext
 ) -> [String] {
+    let batteryHistory = history.compactMap { $0.battery.percentage }
     var rows = [
-        fitLine("Battery \(formatOptionalPercent(sample.battery.percentage)) \(sample.battery.state)", width: width),
-        fitLine("Thermal \(sample.thermal.state)", width: width),
-        fitLine("cpu " + trendStrip(values: history.compactMap { $0.cpu.packagePowerWatts }, maxWidth: max(width - 4, 8)), width: width),
-        fitLine("gpu " + trendStrip(values: history.compactMap { $0.gpu.powerWatts }, maxWidth: max(width - 4, 8)), width: width)
+        theme.segment(fitLine("Battery \(formatOptionalPercent(sample.battery.percentage)) \(sample.battery.state)", width: width), foreground: theme.palette.powerAccent),
+        theme.segment(fitLine("Source \(sample.battery.powerSource)", width: width), foreground: theme.palette.detailAccent),
+        theme.segment(fitLine("Thermal \(sample.thermal.state)", width: width), foreground: theme.palette.warningAccent),
+        fitLine(theme.segment("batt ", foreground: theme.palette.powerAccent, bold: true) + trendStrip(values: batteryHistory, maxWidth: max(width - 5, 8), accent: theme.palette.powerAccent, theme: theme), width: width)
     ]
     if isWide {
-        rows.append(fitLine("ANE \(formatWatts(sample.gpu.anePowerWatts))  Remaining \(sample.battery.timeRemaining ?? "n/a")", width: width))
+        rows.append(theme.segment(fitLine("Remaining \(sample.battery.timeRemaining ?? "n/a")", width: width), foreground: theme.palette.detailAccent))
     }
     return Array(rows.prefix(height))
 }
@@ -1247,10 +1500,14 @@ private func processListPanelRows(
     selectedIndex: Int,
     rangeStart: Int,
     sort: ProcessSortKey,
-    width: Int
+    width: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
     let scaleMax = processScaleMax(processes: processes, sort: sort)
-    let header = fitLine("ranked by \(sort.rawValue)  \(selectedIndex + 1)/\(processes.count)", width: width)
+    let header = theme.segment(
+        fitLine("ranked by \(sort.rawValue)  \(selectedIndex + 1)/\(processes.count)", width: width),
+        foreground: theme.palette.detailAccent
+    )
     return [header] + visible.enumerated().map { offset, process in
         let isSelected = rangeStart + offset == selectedIndex
         return rankedProcessRow(
@@ -1258,7 +1515,8 @@ private func processListPanelRows(
             isSelected: isSelected,
             sort: sort,
             scaleMax: scaleMax,
-            width: width
+            width: width,
+            theme: theme
         )
     }
 }
@@ -1268,26 +1526,29 @@ private func processDetailPanelRows(
     allProcesses: [ProcessSnapshot],
     sample: SampleEnvelope,
     width: Int,
-    height: Int
+    height: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
     let maxNetwork = max(allProcesses.map(processNetworkRate).max() ?? 0, 1)
     let maxEnergy = max(allProcesses.compactMap(\.energyImpact).max() ?? 0, 1)
     let maxGPU = max(allProcesses.compactMap(\.gpuTime).max() ?? 0, 1)
     let totalMemory = Double(max(sample.memory.totalBytes ?? 1, 1))
-    var rows = wrapText("\(process.command) • pid \(process.pid)", width: width, maxLines: min(2, height))
+    var rows = wrapText("\(process.command) • pid \(process.pid)", width: width, maxLines: min(2, height)).map {
+        theme.segment($0, foreground: theme.palette.panelTitle, bold: true)
+    }
     let gauges = [
-        metricGaugeLine(label: "CPU", value: formatOptionalPercent(process.cpuPercent), ratio: (process.cpuPercent ?? 0) / 100, width: width),
-        metricGaugeLine(label: "MEM", value: formatBytes(process.memoryBytes), ratio: Double(process.memoryBytes ?? 0) / totalMemory, width: width),
-        metricGaugeLine(label: "NET", value: formatRateBytes(processNetworkRate(process)), ratio: processNetworkRate(process) / maxNetwork, width: width),
-        metricGaugeLine(label: "ENG", value: formatNumber(process.energyImpact), ratio: (process.energyImpact ?? 0) / maxEnergy, width: width),
-        metricGaugeLine(label: "GPU", value: formatNumber(process.gpuTime), ratio: (process.gpuTime ?? 0) / maxGPU, width: width),
-        fitLine("Time \(process.cumulativeCPUTime ?? "n/a")", width: width)
+        metricGaugeLine(label: "CPU", value: formatOptionalPercent(process.cpuPercent), ratio: (process.cpuPercent ?? 0) / 100, width: width, accent: theme.palette.cpuAccent, theme: theme),
+        metricGaugeLine(label: "MEM", value: formatBytes(process.memoryBytes), ratio: Double(process.memoryBytes ?? 0) / totalMemory, width: width, accent: theme.palette.memoryAccent, theme: theme),
+        metricGaugeLine(label: "NET", value: formatRateBytes(processNetworkRate(process)), ratio: processNetworkRate(process) / maxNetwork, width: width, accent: theme.palette.networkAccent, theme: theme),
+        metricGaugeLine(label: "ENG", value: formatNumber(process.energyImpact), ratio: (process.energyImpact ?? 0) / maxEnergy, width: width, accent: theme.palette.powerAccent, theme: theme),
+        metricGaugeLine(label: "GPU", value: formatNumber(process.gpuTime), ratio: (process.gpuTime ?? 0) / maxGPU, width: width, accent: theme.palette.gpuAccent, theme: theme),
+        theme.segment(fitLine("Time \(process.cumulativeCPUTime ?? "n/a")", width: width), foreground: theme.palette.detailAccent)
     ]
     rows.append(contentsOf: gauges)
     return Array(rows.prefix(height))
 }
 
-private func finalize(lines: [String], width: Int, height: Int) -> String {
+private func finalize(lines: [String], width: Int, height: Int, theme: DashboardThemeContext) -> String {
     let targetHeight = max(height, 1)
     var frameLines = Array(lines.prefix(targetHeight))
     while frameLines.count < targetHeight {
@@ -1295,19 +1556,19 @@ private func finalize(lines: [String], width: Int, height: Int) -> String {
     }
 
     return frameLines
-        .map { padOrTrim($0, width: width) }
+        .map { theme.wrapLine(padOrTrim($0, width: width)) }
         .joined(separator: "\n")
 }
 
-private func fallbackLines(size: TerminalSize, status: String) -> [String] {
+private func fallbackLines(size: TerminalSize, status: String, theme: DashboardThemeContext) -> [String] {
     [
-        fitLine("ObserverMind", width: size.width),
+        theme.segment(fitLine("ObserverMind", width: size.width), foreground: theme.palette.panelTitle, bold: true),
         "",
-        fitLine("Terminal too small for the dashboard.", width: size.width),
-        fitLine("Current size: \(size.width)x\(size.height)", width: size.width),
-        fitLine("Resize to at least 72x18.", width: size.width),
+        theme.segment(fitLine("Terminal too small for the dashboard.", width: size.width), foreground: theme.palette.warningAccent, bold: true),
+        theme.segment(fitLine("Current size: \(size.width)x\(size.height)", width: size.width), foreground: theme.palette.detailAccent),
+        theme.segment(fitLine("Resize to at least 72x18.", width: size.width), foreground: theme.palette.mutedText),
         "",
-        fitLine("Status: \(status)", width: size.width)
+        theme.segment(fitLine("Status: \(status)", width: size.width), foreground: theme.palette.mutedText)
     ]
 }
 
@@ -1316,16 +1577,17 @@ private func powerTrendPanelRows(
     history: [SampleEnvelope],
     width: Int,
     height: Int,
-    isWide: Bool
+    isWide: Bool,
+    theme: DashboardThemeContext
 ) -> [String] {
     var rows = [
-        fitLine("Pkg \(formatWatts(sample.cpu.packagePowerWatts))  GPU \(formatWatts(sample.gpu.powerWatts))  ANE \(formatWatts(sample.gpu.anePowerWatts))", width: width),
-        fitLine("cpu " + trendStrip(values: history.compactMap { $0.cpu.packagePowerWatts }, maxWidth: max(width - 4, 8)), width: width),
-        fitLine("gpu " + trendStrip(values: history.compactMap { $0.gpu.powerWatts }, maxWidth: max(width - 4, 8)), width: width),
-        fitLine("ane " + trendStrip(values: history.compactMap { $0.gpu.anePowerWatts }, maxWidth: max(width - 4, 8)), width: width)
+        theme.segment(fitLine("Pkg \(formatWatts(sample.cpu.packagePowerWatts))  GPU \(formatWatts(sample.gpu.powerWatts))  ANE \(formatWatts(sample.gpu.anePowerWatts))", width: width), foreground: theme.palette.powerAccent),
+        fitLine(theme.segment("cpu ", foreground: theme.palette.cpuAccent, bold: true) + trendStrip(values: history.compactMap { $0.cpu.packagePowerWatts }, maxWidth: max(width - 4, 8), accent: theme.palette.cpuAccent, theme: theme), width: width),
+        fitLine(theme.segment("gpu ", foreground: theme.palette.gpuAccent, bold: true) + trendStrip(values: history.compactMap { $0.gpu.powerWatts }, maxWidth: max(width - 4, 8), accent: theme.palette.gpuAccent, theme: theme), width: width),
+        fitLine(theme.segment("ane ", foreground: theme.palette.detailAccent, bold: true) + trendStrip(values: history.compactMap { $0.gpu.anePowerWatts }, maxWidth: max(width - 4, 8), accent: theme.palette.detailAccent, theme: theme), width: width)
     ]
     if isWide {
-        rows.append(fitLine("CPU total \(formatPercent(sample.totalCPUPercent))", width: width))
+        rows.append(theme.segment(fitLine("CPU total \(formatPercent(sample.totalCPUPercent))", width: width), foreground: theme.palette.detailAccent))
     }
     return Array(rows.prefix(height))
 }
@@ -1334,21 +1596,22 @@ private func batteryThermalPanelRows(
     sample: SampleEnvelope,
     history: [SampleEnvelope],
     width: Int,
-    height: Int
+    height: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
     let batteryRatio = (sample.battery.percentage ?? 0) / 100
     var rows = [
-        fitLine("Battery \(formatOptionalPercent(sample.battery.percentage)) \(sample.battery.state)", width: width),
-        metricGaugeLine(label: "BATT", value: formatOptionalPercent(sample.battery.percentage), ratio: batteryRatio, width: width),
-        fitLine("Thermal \(sample.thermal.state)", width: width),
-        fitLine("Source \(sample.battery.powerSource)", width: width)
+        theme.segment(fitLine("Battery \(formatOptionalPercent(sample.battery.percentage)) \(sample.battery.state)", width: width), foreground: theme.palette.powerAccent),
+        metricGaugeLine(label: "BATT", value: formatOptionalPercent(sample.battery.percentage), ratio: batteryRatio, width: width, accent: theme.palette.powerAccent, theme: theme),
+        theme.segment(fitLine("Thermal \(sample.thermal.state)", width: width), foreground: theme.palette.warningAccent),
+        theme.segment(fitLine("Source \(sample.battery.powerSource)", width: width), foreground: theme.palette.detailAccent)
     ]
     let batteryHistory = history.compactMap { $0.battery.percentage }
     if height > 4 {
-        rows.append(fitLine("hist " + trendStrip(values: batteryHistory, maxWidth: max(width - 5, 8)), width: width))
+        rows.append(fitLine(theme.segment("hist ", foreground: theme.palette.powerAccent, bold: true) + trendStrip(values: batteryHistory, maxWidth: max(width - 5, 8), accent: theme.palette.powerAccent, theme: theme), width: width))
     }
     if height > 5 {
-        rows.append(fitLine("Remaining \(sample.battery.timeRemaining ?? "n/a")", width: width))
+        rows.append(theme.segment(fitLine("Remaining \(sample.battery.timeRemaining ?? "n/a")", width: width), foreground: theme.palette.detailAccent))
     }
     return Array(rows.prefix(height))
 }
@@ -1356,15 +1619,22 @@ private func batteryThermalPanelRows(
 private func advancedMetricsPanelRows(
     sample: SampleEnvelope,
     width: Int,
-    height: Int
+    height: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
     var rows = [
-        fitLine("Status " + (sample.gpu.processMetricsLocked ? "locked" : "available"), width: width)
+        theme.segment(
+            fitLine("Status " + (sample.gpu.processMetricsLocked ? "locked" : "available"), width: width),
+            foreground: sample.gpu.processMetricsLocked ? theme.palette.warningAccent : theme.palette.infoAccent,
+            bold: true
+        )
     ]
     let message = sample.gpu.processMetricsLocked
         ? (sample.gpu.lockReason ?? sample.capabilities.relaunchHint)
         : "Per-process energy and GPU metrics are live. Open Processes to inspect current bars."
-    rows.append(contentsOf: wrapText(message, width: width, maxLines: max(height - rows.count, 0)))
+    rows.append(contentsOf: wrapText(message, width: width, maxLines: max(height - rows.count, 0)).map {
+        theme.segment($0, foreground: theme.palette.mutedText)
+    })
     return Array(rows.prefix(height))
 }
 
@@ -1374,13 +1644,17 @@ private func networkListPanelRows(
     visible: [NetworkProcessSnapshot],
     selectedIndex: Int,
     rangeStart: Int,
-    width: Int
+    width: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
-    let header = fitLine("top talkers  \(formatRateBytes(sample.network.totalInRateBytesPerSec)) in / \(formatRateBytes(sample.network.totalOutRateBytesPerSec)) out", width: width)
+    let header = theme.segment(
+        fitLine("top talkers  \(formatRateBytes(sample.network.totalInRateBytesPerSec)) in / \(formatRateBytes(sample.network.totalOutRateBytesPerSec)) out", width: width),
+        foreground: theme.palette.networkAccent
+    )
     let scaleMax = max(processes.map(networkTotalRate).max() ?? 0, 1)
     return [header] + visible.enumerated().map { offset, process in
         let isSelected = rangeStart + offset == selectedIndex
-        return rankedNetworkRow(process: process, isSelected: isSelected, scaleMax: scaleMax, width: width)
+        return rankedNetworkRow(process: process, isSelected: isSelected, scaleMax: scaleMax, width: width, theme: theme)
     }
 }
 
@@ -1389,17 +1663,20 @@ private func networkDetailPanelRows(
     allProcesses: [NetworkProcessSnapshot],
     sample: SampleEnvelope,
     width: Int,
-    height: Int
+    height: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
     let maxInRate = max(allProcesses.compactMap(\.inRateBytesPerSec).max() ?? 0, 1)
     let maxOutRate = max(allProcesses.compactMap(\.outRateBytesPerSec).max() ?? 0, 1)
     let totalIn = Double(max(sample.network.totalBytesIn, 1))
     let totalOut = Double(max(sample.network.totalBytesOut, 1))
-    var rows = wrapText("\(process.command) • pid \(process.pid.map(String.init) ?? "-")", width: width, maxLines: min(2, height))
-    rows.append(metricGaugeLine(label: "IN", value: formatRateBytes(process.inRateBytesPerSec), ratio: (process.inRateBytesPerSec ?? 0) / maxInRate, width: width))
-    rows.append(metricGaugeLine(label: "OUT", value: formatRateBytes(process.outRateBytesPerSec), ratio: (process.outRateBytesPerSec ?? 0) / maxOutRate, width: width))
-    rows.append(metricGaugeLine(label: "TIN", value: formatBytes(process.bytesIn), ratio: Double(process.bytesIn) / totalIn, width: width))
-    rows.append(metricGaugeLine(label: "TOUT", value: formatBytes(process.bytesOut), ratio: Double(process.bytesOut) / totalOut, width: width))
+    var rows = wrapText("\(process.command) • pid \(process.pid.map(String.init) ?? "-")", width: width, maxLines: min(2, height)).map {
+        theme.segment($0, foreground: theme.palette.panelTitle, bold: true)
+    }
+    rows.append(metricGaugeLine(label: "IN", value: formatRateBytes(process.inRateBytesPerSec), ratio: (process.inRateBytesPerSec ?? 0) / maxInRate, width: width, accent: theme.palette.networkAccent, theme: theme))
+    rows.append(metricGaugeLine(label: "OUT", value: formatRateBytes(process.outRateBytesPerSec), ratio: (process.outRateBytesPerSec ?? 0) / maxOutRate, width: width, accent: theme.palette.networkAccent, theme: theme))
+    rows.append(metricGaugeLine(label: "TIN", value: formatBytes(process.bytesIn), ratio: Double(process.bytesIn) / totalIn, width: width, accent: theme.palette.detailAccent, theme: theme))
+    rows.append(metricGaugeLine(label: "TOUT", value: formatBytes(process.bytesOut), ratio: Double(process.bytesOut) / totalOut, width: width, accent: theme.palette.detailAccent, theme: theme))
     return Array(rows.prefix(height))
 }
 
@@ -1461,36 +1738,96 @@ private func rankedProcessRow(
     isSelected: Bool,
     sort: ProcessSortKey,
     scaleMax: Double,
-    width: Int
+    width: Int,
+    theme: DashboardThemeContext? = nil
 ) -> String {
     let value = processMetricValue(process, sort: sort)
     let display = processMetricDisplay(process, sort: sort)
     let label = "\(isSelected ? "›" : " ") \(process.pid) \(process.command)"
-    return rankedBarRow(label: label, value: display, ratio: value / max(scaleMax, 1), width: width)
+    let accent: ANSIColor? = if let theme {
+        switch sort {
+        case .cpu:
+            theme.palette.cpuAccent
+        case .memory:
+            theme.palette.memoryAccent
+        case .energy:
+            theme.palette.powerAccent
+        case .gpu:
+            theme.palette.gpuAccent
+        case .network:
+            theme.palette.networkAccent
+        }
+    } else {
+        nil
+    }
+    return rankedBarRow(
+        label: label,
+        value: display,
+        ratio: value / max(scaleMax, 1),
+        width: width,
+        accent: accent,
+        theme: theme,
+        selected: isSelected
+    )
 }
 
 private func rankedNetworkRow(
     process: NetworkProcessSnapshot,
     isSelected: Bool,
     scaleMax: Double,
-    width: Int
+    width: Int,
+    theme: DashboardThemeContext? = nil
 ) -> String {
     let label = "\(isSelected ? "›" : " ") \(process.pid.map(String.init) ?? "-") \(process.command)"
-    return rankedBarRow(label: label, value: formatRateBytes(networkTotalRate(process)), ratio: networkTotalRate(process) / max(scaleMax, 1), width: width)
+    return rankedBarRow(
+        label: label,
+        value: formatRateBytes(networkTotalRate(process)),
+        ratio: networkTotalRate(process) / max(scaleMax, 1),
+        width: width,
+        accent: theme?.palette.networkAccent,
+        theme: theme,
+        selected: isSelected
+    )
 }
 
-private func rankedBarRow(label: String, value: String, ratio: Double, width: Int) -> String {
+private func rankedBarRow(
+    label: String,
+    value: String,
+    ratio: Double,
+    width: Int,
+    accent: ANSIColor? = nil,
+    theme: DashboardThemeContext? = nil,
+    selected: Bool = false
+) -> String {
     let barWidth = clamp(width / 4, lower: 8, upper: 14)
     let valueWidth = max(min(max(value.count, 5), max(width / 5, 6)), 5)
     let labelWidth = max(width - barWidth - valueWidth - 2, 10)
-    return padOrTrim(label, width: labelWidth)
-        + " "
-        + padOrTrim(value, width: valueWidth)
-        + " "
-        + gaugeBar(ratio: ratio, width: barWidth)
+    let fittedLabel = padOrTrim(label, width: labelWidth)
+    let fittedValue = padOrTrim(value, width: valueWidth)
+    let bar = gaugeBar(ratio: ratio, width: barWidth, accent: accent, theme: theme)
+
+    if let accent, let theme {
+        let row = fittedLabel
+            + " "
+            + theme.segment(fittedValue, foreground: accent)
+            + " "
+            + bar
+        if selected {
+            let selectedRow = fittedLabel + " " + fittedValue + " " + strippingANSIEscapeSequences(bar)
+            return theme.segment(
+                padOrTrim(selectedRow, width: width),
+                foreground: theme.palette.selectionForeground,
+                background: theme.palette.selectionBackground,
+                bold: true
+            )
+        }
+        return row
+    }
+
+    return fittedLabel + " " + fittedValue + " " + bar
 }
 
-private func renderPanel(title: String, width: Int, height: Int, content: [String]) -> [String] {
+private func renderPanel(title: String, width: Int, height: Int, theme: DashboardThemeContext, content: [String]) -> [String] {
     guard width >= 3, height >= 3 else {
         return Array(content.prefix(max(height, 1))).map { fitLine($0, width: width) }
     }
@@ -1500,49 +1837,67 @@ private func renderPanel(title: String, width: Int, height: Int, content: [Strin
     let rows = Array(content.prefix(innerHeight))
     let filledRows = rows + Array(repeating: "", count: max(innerHeight - rows.count, 0))
 
-    return [panelTopBorder(title: title, width: width)]
-        + filledRows.map { "│" + padOrTrim($0, width: innerWidth) + "│" }
-        + [panelBottomBorder(width: width)]
+    return [panelTopBorder(title: title, width: width, theme: theme)]
+        + filledRows.map {
+            theme.segment("│", foreground: theme.palette.panelBorder)
+                + padOrTrim($0, width: innerWidth)
+                + theme.segment("│", foreground: theme.palette.panelBorder)
+        }
+        + [panelBottomBorder(width: width, theme: theme)]
 }
 
-private func panelTopBorder(title: String, width: Int) -> String {
+private func panelTopBorder(title: String, width: Int, theme: DashboardThemeContext) -> String {
     guard width >= 2 else {
-        return fitLine(title, width: width)
+        return theme.segment(fitLine(title, width: width), foreground: theme.palette.panelTitle, bold: true)
     }
     let innerWidth = max(width - 2, 0)
     let titleText = fitLine(" \(title) ", width: innerWidth)
-    let remaining = max(innerWidth - titleText.count, 0)
-    return "┌" + titleText + String(repeating: "─", count: remaining) + "┐"
+    let remaining = max(innerWidth - strippingANSIEscapeSequences(titleText).count, 0)
+    return theme.segment("┌", foreground: theme.palette.panelBorder)
+        + theme.segment(titleText, foreground: theme.palette.panelTitle, bold: true)
+        + theme.segment(String(repeating: "─", count: remaining), foreground: theme.palette.panelBorder)
+        + theme.segment("┐", foreground: theme.palette.panelBorder)
 }
 
-private func panelBottomBorder(width: Int) -> String {
+private func panelBottomBorder(width: Int, theme: DashboardThemeContext) -> String {
     guard width >= 2 else {
-        return String(repeating: "─", count: max(width, 0))
+        return theme.segment(String(repeating: "─", count: max(width, 0)), foreground: theme.palette.panelBorder)
     }
-    return "└" + String(repeating: "─", count: max(width - 2, 0)) + "┘"
+    return theme.segment("└", foreground: theme.palette.panelBorder)
+        + theme.segment(String(repeating: "─", count: max(width - 2, 0)), foreground: theme.palette.panelBorder)
+        + theme.segment("┘", foreground: theme.palette.panelBorder)
 }
 
 private func panelRowsWithChart(
     staticRows: [String],
     chartValues: [Double],
     width: Int,
-    height: Int
+    height: Int,
+    accent: ANSIColor? = nil,
+    theme: DashboardThemeContext? = nil
 ) -> [String] {
     let chartHeight = max(min(height - min(staticRows.count, max(height - 1, 1)), 4), 1)
     let visibleStatic = Array(staticRows.prefix(max(height - chartHeight, 0)))
-    return visibleStatic + trendChart(values: chartValues, width: width, height: chartHeight)
+    return visibleStatic + trendChart(
+        values: chartValues,
+        width: width,
+        height: chartHeight,
+        accent: accent,
+        theme: theme
+    )
 }
 
 private func loadingPanelRows(
     primary: String,
     secondary: String,
     width: Int,
-    height: Int
+    height: Int,
+    theme: DashboardThemeContext
 ) -> [String] {
     let rows = [
-        fitLine(primary, width: width),
-        fitLine(secondary, width: width),
-        fitLine("Collecting initial sample...", width: width)
+        theme.segment(fitLine(primary, width: width), foreground: theme.palette.panelTitle, bold: true),
+        theme.segment(fitLine(secondary, width: width), foreground: theme.palette.mutedText),
+        theme.segment(fitLine("Collecting initial sample...", width: width), foreground: theme.palette.mutedText, dim: true)
     ]
     return Array(rows.prefix(max(height, 0)))
 }
@@ -1559,14 +1914,27 @@ private func distributeHeights(total: Int, count: Int) -> [Int] {
     return heights
 }
 
-private func trendChart(values: [Double], width: Int, height: Int) -> [String] {
+private func trendChart(
+    values: [Double],
+    width: Int,
+    height: Int,
+    accent: ANSIColor? = nil,
+    theme: DashboardThemeContext? = nil
+) -> [String] {
     guard width > 0, height > 0 else {
         return []
     }
 
     guard values.isEmpty == false else {
-        return Array(repeating: String(repeating: " ", count: width), count: max(height - 1, 0))
-            + [padOrTrim("(no history)", width: width)]
+        let emptyRows = Array(repeating: String(repeating: " ", count: width), count: max(height - 1, 0))
+        let label = padOrTrim("(no history)", width: width)
+        let renderedLabel: String
+        if let theme {
+            renderedLabel = theme.segment(label, foreground: theme.palette.mutedText, dim: true)
+        } else {
+            renderedLabel = label
+        }
+        return emptyRows + [renderedLabel]
     }
 
     let reduced = Array(values.suffix(width))
@@ -1585,17 +1953,30 @@ private func trendChart(values: [Double], width: Int, height: Int) -> [String] {
 
     return stride(from: height, through: 1, by: -1).map { row in
         let line = levels.map { $0 >= row ? "█" : " " }.joined()
-        return padOrTrim(line, width: width)
+        let padded = padOrTrim(line, width: width)
+        if let accent, let theme {
+            return theme.segment(padded, foreground: accent)
+        }
+        return padded
     }
 }
 
-private func trendStrip(values: [Double], maxWidth: Int) -> String {
+private func trendStrip(
+    values: [Double],
+    maxWidth: Int,
+    accent: ANSIColor? = nil,
+    theme: DashboardThemeContext? = nil
+) -> String {
     guard maxWidth > 0 else {
         return ""
     }
 
     guard values.isEmpty == false else {
-        return fitLine("(no history)", width: maxWidth)
+        let label = fitLine("(no history)", width: maxWidth)
+        if let theme {
+            return theme.segment(label, foreground: theme.palette.mutedText, dim: true)
+        }
+        return label
     }
 
     let glyphs = Array("▁▂▃▄▅▆▇█")
@@ -1606,35 +1987,76 @@ private func trendStrip(values: [Double], maxWidth: Int) -> String {
 
     if range < 0.0001 {
         let glyph = maxValue > 0 ? glyphs[3] : glyphs[0]
-        return String(repeating: String(glyph), count: reduced.count)
+        let strip = String(repeating: String(glyph), count: reduced.count)
+        if let accent, let theme {
+            return theme.segment(strip, foreground: accent)
+        }
+        return strip
     }
 
-    return reduced.map { value in
+    let strip = reduced.map { value in
         let normalized = (value - minValue) / range
         let index = min(Int(round(normalized * Double(glyphs.count - 1))), glyphs.count - 1)
         return String(glyphs[index])
     }.joined()
+    if let accent, let theme {
+        return theme.segment(strip, foreground: accent)
+    }
+    return strip
 }
 
-private func gaugeBar(ratio: Double, width: Int) -> String {
+private func gaugeBar(
+    ratio: Double,
+    width: Int,
+    accent: ANSIColor? = nil,
+    theme: DashboardThemeContext? = nil
+) -> String {
     guard width > 0 else {
         return ""
     }
     let clamped = min(max(ratio, 0), 1)
     let filled = min(max(Int(round(clamped * Double(width))), 0), width)
-    return String(repeating: "█", count: filled) + String(repeating: "░", count: max(width - filled, 0))
+    let filledBar = String(repeating: "█", count: filled)
+    let emptyBar = String(repeating: "░", count: max(width - filled, 0))
+    if let accent, let theme {
+        return theme.segment(filledBar, foreground: accent, bold: true)
+            + theme.segment(emptyBar, foreground: theme.palette.gaugeTrack)
+    }
+    return filledBar + emptyBar
 }
 
-private func metricGaugeLine(label: String, value: String, ratio: Double, width: Int) -> String {
+private func metricGaugeLine(
+    label: String,
+    value: String,
+    ratio: Double,
+    width: Int,
+    accent: ANSIColor? = nil,
+    theme: DashboardThemeContext? = nil
+) -> String {
     let labelWidth = 4
     let valueWidth = max(min(max(value.count, 5), max(width / 4, 6)), 5)
     let barWidth = max(width - labelWidth - valueWidth - 2, 4)
+    let fittedLabel = padOrTrim(label, width: labelWidth)
+    let fittedValue = padOrTrim(value, width: valueWidth)
+    let bar = gaugeBar(ratio: ratio, width: barWidth, accent: accent, theme: theme)
+
+    if let accent, let theme {
+        return fitLine(
+            theme.segment(fittedLabel, foreground: accent, bold: true)
+                + " "
+                + theme.segment(fittedValue, foreground: accent)
+                + " "
+                + bar,
+            width: width
+        )
+    }
+
     return fitLine(
-        padOrTrim(label, width: labelWidth)
+        fittedLabel
             + " "
-            + padOrTrim(value, width: valueWidth)
+            + fittedValue
             + " "
-            + gaugeBar(ratio: ratio, width: barWidth),
+            + bar,
         width: width
     )
 }
@@ -1704,31 +2126,6 @@ private func adjustedOffset(current: Int, selection: Int, rowCapacity: Int, item
     return clamp(offset, lower: 0, upper: maxOffset)
 }
 
-private func fitLine(_ text: String, width: Int) -> String {
-    guard width > 0 else {
-        return ""
-    }
-
-    let characters = Array(text)
-    if characters.count <= width {
-        return text
-    }
-
-    if width == 1 {
-        return "…"
-    }
-
-    return String(characters.prefix(width - 1)) + "…"
-}
-
-private func padOrTrim(_ text: String, width: Int) -> String {
-    let fitted = fitLine(text, width: width)
-    let length = fitted.count
-    if length >= width {
-        return fitted
-    }
-    return fitted + String(repeating: " ", count: width - length)
-}
 
 private func clamp(_ value: Int, lower: Int, upper: Int) -> Int {
     min(max(value, lower), upper)

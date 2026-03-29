@@ -6,7 +6,7 @@ import Testing
     let output = DashboardRenderer.render(
         sample: sample,
         history: [sample],
-        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: TerminalSize(width: 60, height: 10),
         status: "small"
     )
@@ -26,7 +26,7 @@ import Testing
     let output = DashboardRenderer.render(
         sample: sample,
         history: [sample],
-        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: TerminalSize(width: 90, height: 20),
         status: "ok"
     )
@@ -58,14 +58,14 @@ import Testing
         let noAlertOutput = DashboardRenderer.render(
             sample: noAlerts,
             history: [noAlerts],
-            state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+            state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
             size: testCase.size,
             status: "Updated 2026-03-29T16:00:00Z"
         )
         let maxAlertOutput = DashboardRenderer.render(
             sample: maxAlerts,
             history: [maxAlerts],
-            state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+            state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
             size: testCase.size,
             status: "Updated 2026-03-29T16:00:00Z"
         )
@@ -93,13 +93,15 @@ import Testing
     let output = DashboardRenderer.render(
         sample: sample,
         history: Array(repeating: sample, count: 12),
-        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: size,
         status: status
     )
 
     #expect(DashboardRenderer.layoutMode(for: size) == .compact)
     #expect(output.contains("Compute"))
+    #expect(output.contains("GPU"))
+    #expect(output.contains("Status locked"))
     #expect(output.contains("Memory"))
     #expect(output.contains("I/O + Power"))
     #expect(output.contains("┌"))
@@ -118,13 +120,14 @@ import Testing
     let output = DashboardRenderer.render(
         sample: sample,
         history: Array(repeating: sample, count: 12),
-        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: size,
         status: "ok"
     )
 
     #expect(DashboardRenderer.layoutMode(for: size) == .medium)
-    #expect(output.contains("CPU"))
+    #expect(output.contains("CPU / GPU"))
+    #expect(output.contains("Status locked"))
     #expect(output.contains("Memory"))
     #expect(output.contains("Network / Disk"))
     #expect(output.contains("Power / Thermal"))
@@ -133,19 +136,29 @@ import Testing
 }
 
 @Test func wideOverviewUsesGridLayout() {
-    let sample = makeSample()
+    var sample = makeSample()
+    sample.capabilities.isRoot = true
+    sample.capabilities.advancedPowerAvailable = true
+    sample.cpu.packagePowerWatts = 22.75
+    sample.gpu.powerWatts = 15.50
+    sample.gpu.anePowerWatts = 3.25
+    sample.gpu.processMetricsLocked = false
+    sample.gpu.lockReason = nil
     let output = DashboardRenderer.render(
         sample: sample,
         history: Array(repeating: sample, count: 18),
-        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: TerminalSize(width: 150, height: 32),
         status: "ok"
     )
 
-    #expect(output.contains("CPU"))
+    #expect(output.contains("CPU / GPU"))
+    #expect(output.contains("Power 15.50W"))
     #expect(output.contains("Memory"))
     #expect(output.contains("Network / Disk"))
     #expect(output.contains("Power / Thermal"))
+    #expect(output.contains("Source Battery Power"))
+    #expect(output.contains("gpu ") == false)
     #expect(output.contains("█"))
     #expect(occurrenceCount(output, needle: "┌") >= 4)
     assertAllLinesFit(output, width: 150)
@@ -155,12 +168,13 @@ import Testing
     let output = DashboardRenderer.render(
         sample: nil,
         history: [],
-        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: TerminalSize(width: 144, height: 48),
         status: "Collecting sample..."
     )
 
-    #expect(output.contains("CPU"))
+    #expect(output.contains("CPU / GPU"))
+    #expect(output.contains("GPU"))
     #expect(output.contains("Memory"))
     #expect(output.contains("Network / Disk"))
     #expect(output.contains("Power / Thermal"))
@@ -175,7 +189,7 @@ import Testing
     let output = DashboardRenderer.render(
         sample: sample,
         history: [sample],
-        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: size,
         status: "ok"
     )
@@ -187,22 +201,131 @@ import Testing
     }
 }
 
+@Test func explicitLightThemeEmitsANSIAndPreservesVisibleFrame() {
+    let sample = makeSample()
+    let size = TerminalSize(width: 96, height: 24)
+    let output = DashboardRenderer.render(
+        sample: sample,
+        history: Array(repeating: sample, count: 8),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
+        size: size,
+        status: "ok"
+    )
+
+    #expect(output.contains("\u{001B}["))
+    #expect(frameLineCount(output) == size.height)
+    for line in frameLines(output) {
+        #expect(line.count == size.width)
+    }
+}
+
+@Test func darkThemeUsesDistinctPaletteFromLightTheme() {
+    let sample = makeSample()
+    let size = TerminalSize(width: 96, height: 24)
+    let lightOutput = DashboardRenderer.render(
+        sample: sample,
+        history: Array(repeating: sample, count: 8),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
+        size: size,
+        status: "ok"
+    )
+    let darkOutput = DashboardRenderer.render(
+        sample: sample,
+        history: Array(repeating: sample, count: 8),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .dark),
+        size: size,
+        status: "ok"
+    )
+
+    #expect(lightOutput.contains("\u{001B}["))
+    #expect(darkOutput.contains("\u{001B}["))
+    #expect(lightOutput != darkOutput)
+    #expect(strippingANSIEscapeSequences(lightOutput) == strippingANSIEscapeSequences(darkOutput))
+}
+
+@Test func autoThemeFollowsInjectedAppearanceProvider() {
+    let sample = makeSample()
+    let size = TerminalSize(width: 96, height: 24)
+    let darkProvider = DashboardAppearanceProvider { "Dark" }
+    let lightProvider = DashboardAppearanceProvider { nil }
+
+    let autoDarkOutput = DashboardRenderer.render(
+        sample: sample,
+        history: [sample],
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        size: size,
+        status: "ok",
+        appearanceProvider: darkProvider
+    )
+    let explicitDarkOutput = DashboardRenderer.render(
+        sample: sample,
+        history: [sample],
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .dark),
+        size: size,
+        status: "ok"
+    )
+    let autoLightOutput = DashboardRenderer.render(
+        sample: sample,
+        history: [sample],
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        size: size,
+        status: "ok",
+        appearanceProvider: lightProvider
+    )
+    let explicitLightOutput = DashboardRenderer.render(
+        sample: sample,
+        history: [sample],
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
+        size: size,
+        status: "ok"
+    )
+
+    #expect(autoDarkOutput == explicitDarkOutput)
+    #expect(autoLightOutput == explicitLightOutput)
+}
+
 @Test func renderUsesCommittedLayoutWhileViewportIsChanging() {
     let sample = makeSample()
     let output = DashboardRenderer.render(
         sample: sample,
         history: Array(repeating: sample, count: 12),
-        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         layoutSize: TerminalSize(width: 90, height: 20),
         viewportSize: TerminalSize(width: 118, height: 28),
         status: "Updated | Resizing… 118x28"
     )
 
     #expect(output.contains("Compute"))
+    #expect(output.contains("GPU"))
     #expect(output.contains("Memory"))
     #expect(output.contains("I/O + Power"))
     #expect(output.contains("Network / Disk") == false)
     #expect(output.contains("Power / Thermal") == false)
+    assertAllLinesFit(output, width: 118)
+}
+
+@Test func mediumOverviewShowsLiveGPUInSharedComputeSection() {
+    var sample = makeSample()
+    sample.capabilities.isRoot = true
+    sample.capabilities.advancedPowerAvailable = true
+    sample.cpu.packagePowerWatts = 19.25
+    sample.gpu.powerWatts = 12.75
+    sample.gpu.anePowerWatts = 2.10
+    sample.gpu.processMetricsLocked = false
+    sample.gpu.lockReason = nil
+
+    let output = DashboardRenderer.render(
+        sample: sample,
+        history: Array(repeating: sample, count: 12),
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
+        size: TerminalSize(width: 118, height: 28),
+        status: "ok"
+    )
+
+    #expect(output.contains("CPU / GPU"))
+    #expect(output.contains("Power 12.75W"))
+    #expect(output.contains("Status locked") == false)
+    #expect(output.contains("Source Battery Power"))
     assertAllLinesFit(output, width: 118)
 }
 
@@ -211,7 +334,7 @@ import Testing
     let output = DashboardRenderer.render(
         sample: sample,
         history: [sample],
-        state: DashboardRenderState(view: .power, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .power, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: TerminalSize(width: 120, height: 40),
         status: "ok"
     )
@@ -233,7 +356,7 @@ import Testing
     let output = DashboardRenderer.render(
         sample: sample,
         history: [sample],
-        state: DashboardRenderState(view: .processes, processSort: .cpu, selectionIndex: 1, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .processes, processSort: .cpu, selectionIndex: 1, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: TerminalSize(width: 120, height: 30),
         status: "ok"
     )
@@ -255,7 +378,7 @@ import Testing
     let output = DashboardRenderer.render(
         sample: sample,
         history: [sample],
-        state: DashboardRenderState(view: .network, processSort: .cpu, selectionIndex: 1, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .network, processSort: .cpu, selectionIndex: 1, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: TerminalSize(width: 118, height: 28),
         status: "ok"
     )
@@ -276,7 +399,7 @@ import Testing
     let output = DashboardRenderer.render(
         sample: sample,
         history: [sample],
-        state: DashboardRenderState(view: .processes, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .auto),
+        state: DashboardRenderState(view: .processes, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: TerminalSize(width: 78, height: 20),
         status: "ok"
     )
@@ -295,7 +418,7 @@ import Testing
         selectionIndex: 17,
         processScrollOffset: 0,
         networkScrollOffset: 0,
-        theme: .auto
+        theme: .light
     )
     let normalized = DashboardRenderer.normalizedState(
         state: initialState,
@@ -326,7 +449,7 @@ import Testing
         selectionIndex: 17,
         processScrollOffset: 0,
         networkScrollOffset: 0,
-        theme: .auto
+        theme: .light
     )
     let normalized = DashboardRenderer.normalizedState(
         state: initialState,
@@ -349,7 +472,7 @@ import Testing
 }
 
 private func assertAllLinesFit(_ output: String, width: Int) {
-    for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
+    for line in strippingANSIEscapeSequences(output).split(separator: "\n", omittingEmptySubsequences: false) {
         #expect(line.count <= width)
     }
 }
@@ -400,7 +523,10 @@ private func makeNetworkProcessFixtures(count: Int) -> [NetworkProcessSnapshot] 
 }
 
 private func renderedLineCount(_ output: String) -> Int {
-    output.trimmingCharacters(in: .newlines).split(separator: "\n", omittingEmptySubsequences: false).count
+    strippingANSIEscapeSequences(output)
+        .trimmingCharacters(in: .newlines)
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .count
 }
 
 private func occurrenceCount(_ output: String, needle: String) -> Int {
@@ -409,7 +535,7 @@ private func occurrenceCount(_ output: String, needle: String) -> Int {
 
 private func lastFooterSeparatorIndex(_ output: String, width: Int) -> Int? {
     let separator = String(repeating: "-", count: width)
-    let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let lines = strippingANSIEscapeSequences(output).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     return lines.lastIndex(of: separator)
 }
 
@@ -418,8 +544,9 @@ private func frameLineCount(_ output: String) -> Int {
 }
 
 private func frameLines(_ output: String) -> [String] {
-    let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    if output.hasSuffix("\n") {
+    let visible = strippingANSIEscapeSequences(output)
+    let lines = visible.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    if visible.hasSuffix("\n") {
         return Array(lines.dropLast())
     }
     return lines

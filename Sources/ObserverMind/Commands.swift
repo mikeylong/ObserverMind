@@ -124,7 +124,7 @@ private func validInterval(_ rawValue: Int) -> Int {
     }
 }
 
-private func renderSnapshotTable(_ sample: SampleEnvelope) -> String {
+func renderSnapshotTable(_ sample: SampleEnvelope) -> String {
     let topProcesses = sample.processes.sorted(by: .cpu).prefix(8)
     var lines: [String] = []
     lines.append("ObserverMind snapshot")
