@@ -175,6 +175,30 @@ struct DashboardResizeUpdate: Sendable {
     var isResizing: Bool
 }
 
+struct DashboardHistoryPoint: Sendable, Equatable {
+    var timestamp: Date
+    var totalCPUPercent: Double
+    var memoryFreePercent: Double?
+    var networkTotalRateBytesPerSec: Double
+    var diskTotalMBPerSec: Double
+    var batteryPercentage: Double?
+    var cpuPackagePowerWatts: Double?
+    var gpuPowerWatts: Double?
+    var anePowerWatts: Double?
+
+    init(sample: SampleEnvelope) {
+        timestamp = sample.timestamp
+        totalCPUPercent = sample.totalCPUPercent
+        memoryFreePercent = sample.memory.freePercent
+        networkTotalRateBytesPerSec = (sample.network.totalInRateBytesPerSec ?? 0) + (sample.network.totalOutRateBytesPerSec ?? 0)
+        diskTotalMBPerSec = sample.disk.totalMBPerSec
+        batteryPercentage = sample.battery.percentage
+        cpuPackagePowerWatts = sample.cpu.packagePowerWatts
+        gpuPowerWatts = sample.gpu.powerWatts
+        anePowerWatts = sample.gpu.anePowerWatts
+    }
+}
+
 struct DashboardResizeCoordinator: Sendable {
     static let debounceInterval: TimeInterval = 0.2
 
@@ -244,19 +268,29 @@ struct DashboardResizeCoordinator: Sendable {
     }
 }
 
-struct SampleRingBuffer: Sendable {
-    private(set) var samples: [SampleEnvelope] = []
+struct DashboardHistoryRingBuffer: Sendable {
+    private(set) var points: [DashboardHistoryPoint] = []
     let capacity: Int
 
     init(capacity: Int) {
         self.capacity = max(capacity, 1)
     }
 
-    mutating func append(_ sample: SampleEnvelope) {
-        samples.append(sample)
-        if samples.count > capacity {
-            samples.removeFirst(samples.count - capacity)
+    mutating func append(_ point: DashboardHistoryPoint) {
+        points.append(point)
+        if points.count > capacity {
+            points.removeFirst(points.count - capacity)
         }
+    }
+
+    mutating func append(sample: SampleEnvelope) {
+        append(DashboardHistoryPoint(sample: sample))
+    }
+}
+
+extension Array where Element == SampleEnvelope {
+    func dashboardHistoryPoints() -> [DashboardHistoryPoint] {
+        map { DashboardHistoryPoint(sample: $0) }
     }
 }
 

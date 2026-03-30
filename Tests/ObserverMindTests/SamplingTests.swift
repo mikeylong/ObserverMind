@@ -2,16 +2,38 @@ import Foundation
 import Testing
 @testable import ObserverMind
 
-@Test func ringBufferRetainsLatestSamples() {
-    var buffer = SampleRingBuffer(capacity: 3)
-    buffer.append(makeSample(timestamp: Date(timeIntervalSince1970: 1)))
-    buffer.append(makeSample(timestamp: Date(timeIntervalSince1970: 2)))
-    buffer.append(makeSample(timestamp: Date(timeIntervalSince1970: 3)))
-    buffer.append(makeSample(timestamp: Date(timeIntervalSince1970: 4)))
+@Test func dashboardHistoryPointCapturesTrendFields() {
+    var sample = makeSample(timestamp: Date(timeIntervalSince1970: 42), cpu: 37, freePercent: 18, diskMBPerSec: 88, batteryPercentage: 73)
+    sample.network.totalInRateBytesPerSec = 1_500
+    sample.network.totalOutRateBytesPerSec = 250
+    sample.cpu.packagePowerWatts = 12.5
+    sample.gpu.powerWatts = 7.25
+    sample.gpu.anePowerWatts = 1.75
 
-    #expect(buffer.samples.count == 3)
-    #expect(buffer.samples.first?.timestamp == Date(timeIntervalSince1970: 2))
-    #expect(buffer.samples.last?.timestamp == Date(timeIntervalSince1970: 4))
+    let point = DashboardHistoryPoint(sample: sample)
+
+    #expect(point.timestamp == sample.timestamp)
+    #expect(point.totalCPUPercent == sample.totalCPUPercent)
+    #expect(point.memoryFreePercent == 18)
+    #expect(point.networkTotalRateBytesPerSec == 1_750)
+    #expect(point.diskTotalMBPerSec == 88)
+    #expect(point.batteryPercentage == 73)
+    #expect(point.cpuPackagePowerWatts == 12.5)
+    #expect(point.gpuPowerWatts == 7.25)
+    #expect(point.anePowerWatts == 1.75)
+}
+
+@Test func dashboardHistoryRingBufferRetainsLatestPoints() {
+    var buffer = DashboardHistoryRingBuffer(capacity: 3)
+    buffer.append(sample: makeSample(timestamp: Date(timeIntervalSince1970: 1), cpu: 10))
+    buffer.append(sample: makeSample(timestamp: Date(timeIntervalSince1970: 2), cpu: 20))
+    buffer.append(sample: makeSample(timestamp: Date(timeIntervalSince1970: 3), cpu: 30))
+    buffer.append(sample: makeSample(timestamp: Date(timeIntervalSince1970: 4), cpu: 40))
+
+    #expect(buffer.points.count == 3)
+    #expect(buffer.points.first?.timestamp == Date(timeIntervalSince1970: 2))
+    #expect(buffer.points.last?.timestamp == Date(timeIntervalSince1970: 4))
+    #expect(buffer.points.last?.totalCPUPercent == 40)
 }
 
 @Test func alertEvaluationFlagsHotAndLowMemoryStates() {

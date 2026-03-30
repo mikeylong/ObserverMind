@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import ObserverMind
 
@@ -135,6 +136,21 @@ import Testing
     assertAllLinesFit(output, width: 110)
 }
 
+@Test func mediumOverviewUsesTallHistogramBands() {
+    let history = makeLivePowerHistory(cpuValues: [18, 32, 47, 61, 78, 93])
+    let output = DashboardRenderer.render(
+        sample: history.last,
+        history: history,
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
+        size: TerminalSize(width: 110, height: 26),
+        status: "ok"
+    )
+
+    #expect(containsPartialHistogramGlyph(output))
+    #expect(histogramLineCount(output) >= 8)
+    assertAllLinesFit(output, width: 110)
+}
+
 @Test func wideOverviewUsesGridLayout() {
     var sample = makeSample()
     sample.capabilities.isRoot = true
@@ -159,7 +175,7 @@ import Testing
     #expect(output.contains("Power / Thermal"))
     #expect(output.contains("Source Battery Power"))
     #expect(output.contains("gpu ") == false)
-    #expect(output.contains("█"))
+    #expect(containsPartialHistogramGlyph(output))
     #expect(occurrenceCount(output, needle: "┌") >= 4)
     assertAllLinesFit(output, width: 150)
 }
@@ -167,7 +183,7 @@ import Testing
 @Test func loadingOverviewUsesStableWideGridBeforeFirstSample() {
     let output = DashboardRenderer.render(
         sample: nil,
-        history: [],
+        history: [] as [DashboardHistoryPoint],
         state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
         size: TerminalSize(width: 144, height: 48),
         status: "Collecting sample..."
@@ -346,6 +362,48 @@ import Testing
     assertAllLinesFit(output, width: 120)
 }
 
+@Test func compactPowerViewGivesTrendPanelMoreHeight() {
+    let history = makeLivePowerHistory(cpuValues: [22, 34, 48, 63, 77, 91])
+    let output = DashboardRenderer.render(
+        sample: history.last,
+        history: history,
+        state: DashboardRenderState(view: .power, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
+        size: TerminalSize(width: 90, height: 20),
+        status: "ok"
+    )
+
+    let lines = frameLines(output)
+    let trendStart = panelStartIndex(lines, title: "Power Trend")
+    let batteryStart = panelStartIndex(lines, title: "Battery / Thermal")
+    let advancedStart = panelStartIndex(lines, title: "Advanced Metrics")
+
+    #expect(trendStart != nil)
+    #expect(batteryStart != nil)
+    #expect(advancedStart != nil)
+    if let trendStart, let batteryStart, let advancedStart {
+        #expect((batteryStart - trendStart) > (advancedStart - batteryStart))
+    }
+    assertAllLinesFit(output, width: 90)
+}
+
+@Test func widePowerViewUsesStackedTallHistograms() {
+    let history = makeLivePowerHistory(cpuValues: [14, 27, 39, 51, 66, 80, 94])
+    let output = DashboardRenderer.render(
+        sample: history.last,
+        history: history,
+        state: DashboardRenderState(view: .power, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
+        size: TerminalSize(width: 144, height: 32),
+        status: "ok"
+    )
+
+    #expect(output.contains("cpu"))
+    #expect(output.contains("gpu"))
+    #expect(output.contains("ane"))
+    #expect(containsPartialHistogramGlyph(output))
+    #expect(histogramLineCount(output) >= 6)
+    assertAllLinesFit(output, width: 144)
+}
+
 @Test func processViewShowsRankedBarsAndSelectedPanel() {
     var sample = makeSample()
     sample.processes = [
@@ -364,7 +422,7 @@ import Testing
     #expect(output.contains("Processes"))
     #expect(output.contains("Selected Process"))
     #expect(output.contains("ProcessTwo"))
-    #expect(output.contains("█"))
+    #expect(containsPartialGaugeGlyph(output))
     assertAllLinesFit(output, width: 120)
 }
 
@@ -386,7 +444,7 @@ import Testing
     #expect(output.contains("Network"))
     #expect(output.contains("Selected Flow"))
     #expect(output.contains("Dropbox"))
-    #expect(output.contains("█"))
+    #expect(containsPartialGaugeGlyph(output))
     assertAllLinesFit(output, width: 118)
 }
 
@@ -522,6 +580,29 @@ private func makeNetworkProcessFixtures(count: Int) -> [NetworkProcessSnapshot] 
     return fixtures
 }
 
+private func makeLivePowerHistory(cpuValues: [Double]) -> [SampleEnvelope] {
+    cpuValues.enumerated().map { index, cpu in
+        var sample = makeSample(
+            timestamp: Date(timeIntervalSince1970: Double(index)),
+            cpu: cpu,
+            freePercent: max(18, 70 - Double(index * 7)),
+            swapOutBytes: Int64(index) * 128 * 1_024 * 1_024,
+            diskMBPerSec: 12 + Double(index * 6),
+            batteryPercentage: 88 - Double(index * 4),
+            batteryState: "discharging",
+            thermalState: index >= cpuValues.count / 2 ? "Fair" : "Nominal"
+        )
+        sample.capabilities.isRoot = true
+        sample.capabilities.advancedPowerAvailable = true
+        sample.cpu.packagePowerWatts = 9 + Double(index) * 2.4
+        sample.gpu.powerWatts = 4 + Double(index) * 1.7
+        sample.gpu.anePowerWatts = 0.8 + Double(index) * 0.6
+        sample.gpu.processMetricsLocked = false
+        sample.gpu.lockReason = nil
+        return sample
+    }
+}
+
 private func renderedLineCount(_ output: String) -> Int {
     strippingANSIEscapeSequences(output)
         .trimmingCharacters(in: .newlines)
@@ -550,4 +631,25 @@ private func frameLines(_ output: String) -> [String] {
         return Array(lines.dropLast())
     }
     return lines
+}
+
+private func containsPartialHistogramGlyph(_ output: String) -> Bool {
+    let glyphs = "▁▂▃▄▅▆▇"
+    return output.contains { glyphs.contains($0) }
+}
+
+private func containsPartialGaugeGlyph(_ output: String) -> Bool {
+    let glyphs = "▏▎▍▌▋▊▉"
+    return output.contains { glyphs.contains($0) }
+}
+
+private func histogramLineCount(_ output: String) -> Int {
+    let glyphs = "▁▂▃▄▅▆▇█"
+    return frameLines(output).filter { line in
+        line.contains { glyphs.contains($0) }
+    }.count
+}
+
+private func panelStartIndex(_ lines: [String], title: String) -> Int? {
+    lines.firstIndex { $0.contains(title) }
 }

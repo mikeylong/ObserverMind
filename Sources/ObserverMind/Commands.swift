@@ -106,10 +106,15 @@ public struct StreamCommand: ParsableCommand {
         var previous: SampleEnvelope?
 
         while duration.map({ Date().timeIntervalSince(start) < Double($0) }) ?? true {
-            let sample = try sampler.collectSample(previous: previous, intervalSeconds: resolvedInterval)
-            previous = sample
-            let data = try encoder.encode(sample)
-            print(String(decoding: data, as: UTF8.self))
+            let line = try autoreleasepool { () -> Result<String, Error> in
+                Result {
+                    let sample = try sampler.collectSample(previous: previous, intervalSeconds: resolvedInterval)
+                    previous = sample
+                    let data = try encoder.encode(sample)
+                    return String(decoding: data, as: UTF8.self)
+                }
+            }.get()
+            print(line)
             fflush(stdout)
             Thread.sleep(forTimeInterval: Double(resolvedInterval))
         }

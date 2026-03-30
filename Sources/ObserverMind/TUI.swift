@@ -29,8 +29,13 @@ final class DashboardApp {
         samplingQueue.async {
             var previous: SampleEnvelope?
             while runtime.shouldContinue {
+                let result = autoreleasepool { () -> Result<SampleEnvelope, Error> in
+                    Result {
+                        try sampler.collectSample(previous: previous, intervalSeconds: intervalSeconds)
+                    }
+                }
                 do {
-                    let sample = try sampler.collectSample(previous: previous, intervalSeconds: intervalSeconds)
+                    let sample = try result.get()
                     previous = sample
                     runtime.update(with: sample)
                 } catch {
@@ -48,83 +53,91 @@ final class DashboardApp {
         }
 
         while true {
-            let snapshot = runtime.snapshot()
-            let resize = resizeCoordinator.update(liveSize: terminal.size())
-            let layoutSize = resize.layoutSize
-            let viewportSize = resize.viewportSize
-            let sampleTimestamp = snapshot.sample?.timestamp
+            let shouldExit = autoreleasepool { () -> Bool in
+                let snapshot = runtime.snapshot()
+                let resize = resizeCoordinator.update(liveSize: terminal.size())
+                let layoutSize = resize.layoutSize
+                let viewportSize = resize.viewportSize
+                let sampleTimestamp = snapshot.sample?.timestamp
 
-            if sampleTimestamp != normalizedSampleTimestamp {
-                needsNormalization = true
-            }
-
-            if needsNormalization || resize.committedChanged {
-                state = DashboardRenderer.normalizedState(state: state, sample: snapshot.sample, size: layoutSize)
-                normalizedSampleTimestamp = sampleTimestamp
-                needsNormalization = false
-            }
-
-            let frame = DashboardRenderer.render(
-                sample: snapshot.sample,
-                history: snapshot.history,
-                state: state,
-                layoutSize: layoutSize,
-                viewportSize: viewportSize,
-                status: renderStatus(baseStatus: snapshot.status, resize: resize)
-            )
-            terminal.draw(frame)
-
-            if let key = terminal.pollKey() {
-                switch key {
-                case .character("q"), .character("Q"), .interrupt:
-                    runtime.stop()
-                    return
-                case .character("1"):
-                    state.view = .overview
-                    state.selectionIndex = 0
+                if sampleTimestamp != normalizedSampleTimestamp {
                     needsNormalization = true
-                case .character("2"):
-                    state.view = .processes
-                    state.selectionIndex = 0
-                    state.processScrollOffset = 0
-                    needsNormalization = true
-                case .character("3"):
-                    state.view = .network
-                    state.selectionIndex = 0
-                    state.networkScrollOffset = 0
-                    needsNormalization = true
-                case .character("4"):
-                    state.view = .power
-                    state.selectionIndex = 0
-                    needsNormalization = true
-                case .character("s"), .character("S"):
-                    if state.view == .processes {
-                        state.processSort = nextSort(after: state.processSort)
-                        needsNormalization = true
-                    }
-                case .character("r"), .character("R"):
-                    runtime.triggerImmediateRefresh()
-                case .character("j"), .arrowDown:
-                    if state.view == .processes || state.view == .network {
-                        state.selectionIndex += 1
-                        needsNormalization = true
-                    }
-                case .character("k"), .arrowUp:
-                    if state.view == .processes || state.view == .network {
-                        state.selectionIndex = max(0, state.selectionIndex - 1)
-                        needsNormalization = true
-                    }
-                case .character("h"), .arrowLeft:
-                    state.view = previousView(before: state.view)
-                    resetViewportState(for: &state)
-                    needsNormalization = true
-                case .character("l"), .arrowRight:
-                    state.view = nextView(after: state.view)
-                    resetViewportState(for: &state)
-                    needsNormalization = true
-                default:
-                    break
                 }
+
+                if needsNormalization || resize.committedChanged {
+                    state = DashboardRenderer.normalizedState(state: state, sample: snapshot.sample, size: layoutSize)
+                    normalizedSampleTimestamp = sampleTimestamp
+                    needsNormalization = false
+                }
+
+                let frame = DashboardRenderer.render(
+                    sample: snapshot.sample,
+                    history: snapshot.history,
+                    state: state,
+                    layoutSize: layoutSize,
+                    viewportSize: viewportSize,
+                    status: renderStatus(baseStatus: snapshot.status, resize: resize)
+                )
+                terminal.draw(frame)
+
+                if let key = terminal.pollKey() {
+                    switch key {
+                    case .character("q"), .character("Q"), .interrupt:
+                        runtime.stop()
+                        return true
+                    case .character("1"):
+                        state.view = .overview
+                        state.selectionIndex = 0
+                        needsNormalization = true
+                    case .character("2"):
+                        state.view = .processes
+                        state.selectionIndex = 0
+                        state.processScrollOffset = 0
+                        needsNormalization = true
+                    case .character("3"):
+                        state.view = .network
+                        state.selectionIndex = 0
+                        state.networkScrollOffset = 0
+                        needsNormalization = true
+                    case .character("4"):
+                        state.view = .power
+                        state.selectionIndex = 0
+                        needsNormalization = true
+                    case .character("s"), .character("S"):
+                        if state.view == .processes {
+                            state.processSort = nextSort(after: state.processSort)
+                            needsNormalization = true
+                        }
+                    case .character("r"), .character("R"):
+                        runtime.triggerImmediateRefresh()
+                    case .character("j"), .arrowDown:
+                        if state.view == .processes || state.view == .network {
+                            state.selectionIndex += 1
+                            needsNormalization = true
+                        }
+                    case .character("k"), .arrowUp:
+                        if state.view == .processes || state.view == .network {
+                            state.selectionIndex = max(0, state.selectionIndex - 1)
+                            needsNormalization = true
+                        }
+                    case .character("h"), .arrowLeft:
+                        state.view = previousView(before: state.view)
+                        resetViewportState(for: &state)
+                        needsNormalization = true
+                    case .character("l"), .arrowRight:
+                        state.view = nextView(after: state.view)
+                        resetViewportState(for: &state)
+                        needsNormalization = true
+                    default:
+                        break
+                    }
+                }
+
+                return false
+            }
+
+            if shouldExit {
+                return
             }
 
             Thread.sleep(forTimeInterval: 0.1)
@@ -172,14 +185,14 @@ final class DashboardApp {
 
 struct DashboardRuntimeSnapshot {
     var sample: SampleEnvelope?
-    var history: [SampleEnvelope]
+    var history: [DashboardHistoryPoint]
     var status: String
 }
 
 final class DashboardRuntimeState: @unchecked Sendable {
     private let lock = NSLock()
     private var sample: SampleEnvelope?
-    private var history = SampleRingBuffer(capacity: 3_600)
+    private var history = DashboardHistoryRingBuffer(capacity: 3_600)
     private var status = "Collecting sample..."
     private var running = true
     private var forceRefresh = false
@@ -193,13 +206,13 @@ final class DashboardRuntimeState: @unchecked Sendable {
     func snapshot() -> DashboardRuntimeSnapshot {
         lock.lock()
         defer { lock.unlock() }
-        return DashboardRuntimeSnapshot(sample: sample, history: history.samples, status: status)
+        return DashboardRuntimeSnapshot(sample: sample, history: history.points, status: status)
     }
 
     func update(with sample: SampleEnvelope) {
         lock.lock()
         self.sample = sample
-        history.append(sample)
+        history.append(sample: sample)
         status = "Updated \(iso8601(sample.timestamp))"
         forceRefresh = false
         lock.unlock()
@@ -336,6 +349,45 @@ enum DashboardRenderer {
         sample: SampleEnvelope?,
         history: [SampleEnvelope],
         state: DashboardRenderState,
+        layoutSize: TerminalSize,
+        viewportSize: TerminalSize,
+        status: String,
+        appearanceProvider: DashboardAppearanceProvider = .live
+    ) -> String {
+        render(
+            sample: sample,
+            history: history.dashboardHistoryPoints(),
+            state: state,
+            layoutSize: layoutSize,
+            viewportSize: viewportSize,
+            status: status,
+            appearanceProvider: appearanceProvider
+        )
+    }
+
+    static func render(
+        sample: SampleEnvelope?,
+        history: [SampleEnvelope],
+        state: DashboardRenderState,
+        size: TerminalSize,
+        status: String,
+        appearanceProvider: DashboardAppearanceProvider = .live
+    ) -> String {
+        render(
+            sample: sample,
+            history: history.dashboardHistoryPoints(),
+            state: state,
+            layoutSize: size,
+            viewportSize: size,
+            status: status,
+            appearanceProvider: appearanceProvider
+        )
+    }
+
+    static func render(
+        sample: SampleEnvelope?,
+        history: [DashboardHistoryPoint],
+        state: DashboardRenderState,
         size: TerminalSize,
         status: String,
         appearanceProvider: DashboardAppearanceProvider = .live
@@ -353,7 +405,7 @@ enum DashboardRenderer {
 
     static func render(
         sample: SampleEnvelope?,
-        history: [SampleEnvelope],
+        history: [DashboardHistoryPoint],
         state: DashboardRenderState,
         layoutSize: TerminalSize,
         viewportSize: TerminalSize,
@@ -397,7 +449,7 @@ enum DashboardRenderer {
 
     private static func bodyLines(
         sample: SampleEnvelope,
-        history: [SampleEnvelope],
+        history: [DashboardHistoryPoint],
         state: DashboardRenderState,
         layout: DashboardLayout,
         theme: DashboardThemeContext
@@ -589,7 +641,7 @@ enum DashboardRenderer {
 
     private static func overviewLines(
         sample: SampleEnvelope,
-        history: [SampleEnvelope],
+        history: [DashboardHistoryPoint],
         layout: DashboardLayout,
         theme: DashboardThemeContext
     ) -> [String] {
@@ -705,7 +757,7 @@ enum DashboardRenderer {
 
     private static func compactOverviewLines(
         sample: SampleEnvelope,
-        history: [SampleEnvelope],
+        history: [DashboardHistoryPoint],
         layout: DashboardLayout,
         theme: DashboardThemeContext
     ) -> [String] {
@@ -737,42 +789,41 @@ enum DashboardRenderer {
 
     private static func gridOverviewLines(
         sample: SampleEnvelope,
-        history: [SampleEnvelope],
+        history: [DashboardHistoryPoint],
         layout: DashboardLayout,
         theme: DashboardThemeContext
     ) -> [String] {
         let rowHeights = distributeHeights(total: layout.bodyHeight, count: 2)
         let leftWidth = max((layout.width - 2) / 2, 24)
         let rightWidth = max(layout.width - leftWidth - 2, 24)
-        let isWide = layout.mode == .wide
 
         let cpu = renderPanel(
             title: "CPU / GPU",
             width: leftWidth,
             height: rowHeights[0],
             theme: theme,
-            content: splitComputePanelRows(sample: sample, history: history, width: leftWidth - 2, height: rowHeights[0] - 2, isWide: isWide, theme: theme)
+            content: splitComputePanelRows(sample: sample, history: history, width: leftWidth - 2, height: rowHeights[0] - 2, layoutMode: layout.mode, theme: theme)
         )
         let memory = renderPanel(
             title: "Memory",
             width: rightWidth,
             height: rowHeights[0],
             theme: theme,
-            content: memoryPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rowHeights[0] - 2, isWide: isWide, theme: theme)
+            content: memoryPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rowHeights[0] - 2, layoutMode: layout.mode, theme: theme)
         )
         let io = renderPanel(
             title: "Network / Disk",
             width: leftWidth,
             height: rowHeights[1],
             theme: theme,
-            content: ioPanelRows(sample: sample, history: history, width: leftWidth - 2, height: rowHeights[1] - 2, isWide: isWide, theme: theme)
+            content: ioPanelRows(sample: sample, history: history, width: leftWidth - 2, height: rowHeights[1] - 2, layoutMode: layout.mode, theme: theme)
         )
         let power = renderPanel(
             title: "Power / Thermal",
             width: rightWidth,
             height: rowHeights[1],
             theme: theme,
-            content: powerThermalPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rowHeights[1] - 2, isWide: isWide, theme: theme)
+            content: powerThermalPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rowHeights[1] - 2, layoutMode: layout.mode, theme: theme)
         )
 
         return combineColumns(left: cpu, right: memory, leftWidth: leftWidth, rightWidth: rightWidth)
@@ -1001,26 +1052,26 @@ enum DashboardRenderer {
 
     private static func powerLines(
         sample: SampleEnvelope,
-        history: [SampleEnvelope],
+        history: [DashboardHistoryPoint],
         layout: DashboardLayout,
         theme: DashboardThemeContext
     ) -> [String] {
         switch layout.mode {
         case .compact:
-            let heights = distributeHeights(total: layout.bodyHeight, count: 3)
+            let heights = compactPowerPanelHeights(total: layout.bodyHeight)
             let trend = renderPanel(
                 title: "Power Trend",
                 width: layout.width,
                 height: heights[0],
                 theme: theme,
-                content: powerTrendPanelRows(sample: sample, history: history, width: layout.width - 2, height: heights[0] - 2, isWide: false, theme: theme)
+                content: powerTrendPanelRows(sample: sample, history: history, width: layout.width - 2, height: heights[0] - 2, layoutMode: .compact, theme: theme)
             )
             let battery = renderPanel(
                 title: "Battery / Thermal",
                 width: layout.width,
                 height: heights[1],
                 theme: theme,
-                content: batteryThermalPanelRows(sample: sample, history: history, width: layout.width - 2, height: heights[1] - 2, theme: theme)
+                content: batteryThermalPanelRows(sample: sample, history: history, width: layout.width - 2, height: heights[1] - 2, layoutMode: .compact, theme: theme)
             )
             let advanced = renderPanel(
                 title: "Advanced Metrics",
@@ -1039,14 +1090,14 @@ enum DashboardRenderer {
                 width: leftWidth,
                 height: layout.bodyHeight,
                 theme: theme,
-                content: powerTrendPanelRows(sample: sample, history: history, width: leftWidth - 2, height: layout.bodyHeight - 2, isWide: layout.mode == .wide, theme: theme)
+                content: powerTrendPanelRows(sample: sample, history: history, width: leftWidth - 2, height: layout.bodyHeight - 2, layoutMode: layout.mode, theme: theme)
             )
             let right = renderPanel(
                 title: "Battery / Thermal",
                 width: rightWidth,
                 height: rightHeights[0],
                 theme: theme,
-                content: batteryThermalPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rightHeights[0] - 2, theme: theme)
+                content: batteryThermalPanelRows(sample: sample, history: history, width: rightWidth - 2, height: rightHeights[0] - 2, layoutMode: layout.mode, theme: theme)
             ) + renderPanel(
                 title: "Advanced Metrics",
                 width: rightWidth,
@@ -1063,7 +1114,7 @@ enum DashboardRenderer {
     private static func loadingPowerLines(layout: DashboardLayout, theme: DashboardThemeContext) -> [String] {
         switch layout.mode {
         case .compact:
-            let heights = distributeHeights(total: layout.bodyHeight, count: 3)
+            let heights = compactPowerPanelHeights(total: layout.bodyHeight)
             let trend = renderPanel(
                 title: "Power Trend",
                 width: layout.width,
@@ -1071,7 +1122,7 @@ enum DashboardRenderer {
                 theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting package, GPU, and ANE power...",
-                    secondary: "Trend strips start on the first sample.",
+                    secondary: "Trend charts start on the first sample.",
                     width: max(layout.width - 2, 1),
                     height: max(heights[0] - 2, 1),
                     theme: theme
@@ -1115,7 +1166,7 @@ enum DashboardRenderer {
                 theme: theme,
                 content: loadingPanelRows(
                     primary: "Collecting package, GPU, and ANE power...",
-                    secondary: "Trend history starts with the first sample.",
+                    secondary: "Trend charts start with the first sample.",
                     width: max(leftWidth - 2, 1),
                     height: max(layout.bodyHeight - 2, 1),
                     theme: theme
@@ -1235,12 +1286,12 @@ enum DashboardRenderer {
 
 private func compactComputePanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
     theme: DashboardThemeContext
 ) -> [String] {
-    splitComputePanelRows(sample: sample, history: history, width: width, height: height, isWide: false, theme: theme)
+    splitComputePanelRows(sample: sample, history: history, width: width, height: height, layoutMode: .compact, theme: theme)
 }
 
 private func loadingComputePanelRows(
@@ -1295,10 +1346,10 @@ private func loadingComputePanelRows(
 
 private func splitComputePanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
-    isWide: Bool,
+    layoutMode: DashboardLayoutMode,
     theme: DashboardThemeContext
 ) -> [String] {
     let gap = 2
@@ -1307,8 +1358,8 @@ private func splitComputePanelRows(
     if canSplit {
         let leftWidth = max((width - gap) / 2, 1)
         let rightWidth = max(width - leftWidth - gap, 1)
-        let cpuRows = cpuPanelRows(sample: sample, history: history, width: leftWidth, height: height, isWide: isWide, theme: theme)
-        let gpuRows = gpuPanelRows(sample: sample, history: history, width: rightWidth, height: height, isWide: isWide, theme: theme)
+        let cpuRows = cpuPanelRows(sample: sample, history: history, width: leftWidth, height: height, layoutMode: layoutMode, theme: theme)
+        let gpuRows = gpuPanelRows(sample: sample, history: history, width: rightWidth, height: height, layoutMode: layoutMode, theme: theme)
         return Array(
             combineColumns(left: cpuRows, right: gpuRows, leftWidth: leftWidth, rightWidth: rightWidth, gap: gap)
                 .prefix(height)
@@ -1317,8 +1368,8 @@ private func splitComputePanelRows(
 
     let heights = distributeHeights(total: max(height, 2), count: 2)
     return Array(
-        cpuPanelRows(sample: sample, history: history, width: width, height: heights[0], isWide: isWide, theme: theme)
-        + gpuPanelRows(sample: sample, history: history, width: width, height: heights[1], isWide: isWide, theme: theme)
+        cpuPanelRows(sample: sample, history: history, width: width, height: heights[0], layoutMode: layoutMode, theme: theme)
+        + gpuPanelRows(sample: sample, history: history, width: width, height: heights[1], layoutMode: layoutMode, theme: theme)
     .prefix(height))
 }
 
@@ -1334,34 +1385,38 @@ private func combineColumns(left: [String], right: [String], leftWidth: Int, rig
 
 private func compactMemoryPanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
     theme: DashboardThemeContext
 ) -> [String] {
-    [
+    let rows = [
         fitLine("Used \(formatBytes(sample.memory.usedBytes)) / \(formatBytes(sample.memory.totalBytes))", width: width),
         fitLine("Free \(formatBytes(sample.memory.freeBytes))  Wired \(formatBytes(sample.memory.wiredBytes))", width: width),
-        fitLine(
-            theme.segment("mem ", foreground: theme.palette.memoryAccent, bold: true)
-                + trendStrip(values: history.compactMap { $0.memory.freePercent }, maxWidth: max(width - 4, 8), accent: theme.palette.memoryAccent, theme: theme),
-            width: width
-        ),
         theme.segment(
             fitLine("Comp \(formatBytes(sample.memory.compressedBytes))  Swap \(formatBytes(sample.memory.swapOutBytes))", width: width),
             foreground: theme.palette.detailAccent
         )
-    ].prefix(height).map { $0 }
+    ]
+    return panelRowsWithChart(
+        staticRows: rows,
+        chartValues: history.compactMap(\.memoryFreePercent),
+        width: width,
+        height: height,
+        layoutMode: .compact,
+        accent: theme.palette.memoryAccent,
+        theme: theme
+    )
 }
 
 private func compactIOPowerPanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
     theme: DashboardThemeContext
 ) -> [String] {
-    let totalNetwork = history.map { ($0.network.totalInRateBytesPerSec ?? 0) + ($0.network.totalOutRateBytesPerSec ?? 0) }
+    let totalNetwork = history.map(\.networkTotalRateBytesPerSec)
     return [
         theme.segment(
             fitLine("Net \(formatRateBytes(sample.network.totalInRateBytesPerSec)) in  \(formatRateBytes(sample.network.totalOutRateBytesPerSec)) out", width: width),
@@ -1385,39 +1440,41 @@ private func compactIOPowerPanelRows(
 
 private func cpuPanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
-    isWide: Bool,
+    layoutMode: DashboardLayoutMode,
     theme: DashboardThemeContext
 ) -> [String] {
+    let isWide = layoutMode == .wide
     let textRows = [
         theme.segment(fitLine("CPU", width: width), foreground: theme.palette.cpuAccent, bold: true),
         fitLine("Total \(formatPercent(sample.totalCPUPercent))  Idle \(formatPercent(sample.cpu.idlePercent))", width: width),
-        theme.segment(fitLine("Load \(formatNumber(sample.cpu.loadAverage1m)) / \(formatNumber(sample.cpu.loadAverage5m))", width: width), foreground: theme.palette.detailAccent),
-        theme.segment(fitLine("Pkg \(formatWatts(sample.cpu.packagePowerWatts))", width: width), foreground: theme.palette.cpuAccent)
+        theme.segment(fitLine("Pkg \(formatWatts(sample.cpu.packagePowerWatts))", width: width), foreground: theme.palette.cpuAccent),
+        theme.segment(fitLine("Load \(formatNumber(sample.cpu.loadAverage1m)) / \(formatNumber(sample.cpu.loadAverage5m))", width: width), foreground: theme.palette.detailAccent)
     ] + (isWide ? [theme.segment(fitLine("User \(formatPercent(sample.cpu.userPercent))  Sys \(formatPercent(sample.cpu.systemPercent))", width: width), foreground: theme.palette.mutedText)] : [])
-    return panelRowsWithChart(staticRows: textRows, chartValues: history.map(\.totalCPUPercent), width: width, height: height, accent: theme.palette.cpuAccent, theme: theme)
+    return panelRowsWithChart(staticRows: textRows, chartValues: history.map(\.totalCPUPercent), width: width, height: height, layoutMode: layoutMode, accent: theme.palette.cpuAccent, theme: theme)
 }
 
 private func gpuPanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
-    isWide: Bool,
+    layoutMode: DashboardLayoutMode,
     theme: DashboardThemeContext
 ) -> [String] {
+    let isWide = layoutMode == .wide
     let hasLiveMetrics = sample.capabilities.advancedPowerAvailable && sample.gpu.processMetricsLocked == false
 
     if hasLiveMetrics {
         let textRows = [
             theme.segment(fitLine("GPU", width: width), foreground: theme.palette.gpuAccent, bold: true),
             theme.segment(fitLine("Power \(formatWatts(sample.gpu.powerWatts))  ANE \(formatWatts(sample.gpu.anePowerWatts))", width: width), foreground: theme.palette.gpuAccent),
-            theme.segment(fitLine("Model \(sample.gpu.model ?? sample.host.gpuModel ?? "Unknown")", width: width), foreground: theme.palette.detailAccent),
-            fitLine("Cores \(sample.gpu.coreCount ?? sample.host.gpuCoreCount ?? 0)", width: width)
+            fitLine("Cores \(sample.gpu.coreCount ?? sample.host.gpuCoreCount ?? 0)", width: width),
+            theme.segment(fitLine("Model \(sample.gpu.model ?? sample.host.gpuModel ?? "Unknown")", width: width), foreground: theme.palette.detailAccent)
         ] + (isWide ? [theme.segment(fitLine("Status available", width: width), foreground: theme.palette.infoAccent)] : [])
-        return panelRowsWithChart(staticRows: textRows, chartValues: history.compactMap { $0.gpu.powerWatts }, width: width, height: height, accent: theme.palette.gpuAccent, theme: theme)
+        return panelRowsWithChart(staticRows: textRows, chartValues: history.compactMap(\.gpuPowerWatts), width: width, height: height, layoutMode: layoutMode, accent: theme.palette.gpuAccent, theme: theme)
     }
 
     var rows = [
@@ -1437,61 +1494,100 @@ private func gpuPanelRows(
 
 private func memoryPanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
-    isWide: Bool,
+    layoutMode: DashboardLayoutMode,
     theme: DashboardThemeContext
 ) -> [String] {
+    let isWide = layoutMode == .wide
     let textRows = [
         fitLine("Used \(formatBytes(sample.memory.usedBytes)) / \(formatBytes(sample.memory.totalBytes))", width: width),
         fitLine("Free \(formatBytes(sample.memory.freeBytes))  \(formatOptionalPercent(sample.memory.freePercent))", width: width),
         theme.segment(fitLine("Wired \(formatBytes(sample.memory.wiredBytes))  Compr \(formatBytes(sample.memory.compressedBytes))", width: width), foreground: theme.palette.memoryAccent)
     ] + (isWide ? [theme.segment(fitLine("Swap in \(formatBytes(sample.memory.swapInBytes))  out \(formatBytes(sample.memory.swapOutBytes))", width: width), foreground: theme.palette.detailAccent)] : [])
-    return panelRowsWithChart(staticRows: textRows, chartValues: history.compactMap { $0.memory.freePercent }, width: width, height: height, accent: theme.palette.memoryAccent, theme: theme)
+    return panelRowsWithChart(staticRows: textRows, chartValues: history.compactMap(\.memoryFreePercent), width: width, height: height, layoutMode: layoutMode, accent: theme.palette.memoryAccent, theme: theme)
 }
 
 private func ioPanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
-    isWide: Bool,
+    layoutMode: DashboardLayoutMode,
     theme: DashboardThemeContext
 ) -> [String] {
-    let networkHistory = history.map { ($0.network.totalInRateBytesPerSec ?? 0) + ($0.network.totalOutRateBytesPerSec ?? 0) }
-    let diskHistory = history.map(\.disk.totalMBPerSec)
-    var rows = [
+    let isWide = layoutMode == .wide
+    let networkHistory = history.map(\.networkTotalRateBytesPerSec)
+    let diskHistory = history.map(\.diskTotalMBPerSec)
+    guard layoutMode != .compact else {
+        var rows = [
+            theme.segment(fitLine("Net \(formatRateBytes(sample.network.totalInRateBytesPerSec)) in  \(formatRateBytes(sample.network.totalOutRateBytesPerSec)) out", width: width), foreground: theme.palette.networkAccent),
+            theme.segment(fitLine("Disk \(formatRateMB(sample.disk.readMBPerSec)) read  \(formatRateMB(sample.disk.writeMBPerSec)) write", width: width), foreground: theme.palette.powerAccent),
+            fitLine(theme.segment("net ", foreground: theme.palette.networkAccent, bold: true) + trendStrip(values: networkHistory, maxWidth: max(width - 4, 8), accent: theme.palette.networkAccent, theme: theme), width: width),
+            fitLine(theme.segment("io  ", foreground: theme.palette.powerAccent, bold: true) + trendStrip(values: diskHistory, maxWidth: max(width - 4, 8), accent: theme.palette.powerAccent, theme: theme), width: width)
+        ]
+        if isWide {
+            rows.append(theme.segment(fitLine("Totals \(formatBytes(sample.network.totalBytesIn)) in / \(formatBytes(sample.network.totalBytesOut)) out", width: width), foreground: theme.palette.detailAccent))
+        }
+        return Array(rows.prefix(height))
+    }
+
+    let rows = [
         theme.segment(fitLine("Net \(formatRateBytes(sample.network.totalInRateBytesPerSec)) in  \(formatRateBytes(sample.network.totalOutRateBytesPerSec)) out", width: width), foreground: theme.palette.networkAccent),
         theme.segment(fitLine("Disk \(formatRateMB(sample.disk.readMBPerSec)) read  \(formatRateMB(sample.disk.writeMBPerSec)) write", width: width), foreground: theme.palette.powerAccent),
-        fitLine(theme.segment("net ", foreground: theme.palette.networkAccent, bold: true) + trendStrip(values: networkHistory, maxWidth: max(width - 4, 8), accent: theme.palette.networkAccent, theme: theme), width: width),
-        fitLine(theme.segment("io  ", foreground: theme.palette.powerAccent, bold: true) + trendStrip(values: diskHistory, maxWidth: max(width - 4, 8), accent: theme.palette.powerAccent, theme: theme), width: width)
+        theme.segment(fitLine("Totals \(formatBytes(sample.network.totalBytesIn)) in / \(formatBytes(sample.network.totalBytesOut)) out", width: width), foreground: theme.palette.detailAccent)
     ]
-    if isWide {
-        rows.append(theme.segment(fitLine("Totals \(formatBytes(sample.network.totalBytesIn)) in / \(formatBytes(sample.network.totalBytesOut)) out", width: width), foreground: theme.palette.detailAccent))
-    }
-    return Array(rows.prefix(height))
+    return panelRowsWithTrendSections(
+        staticRows: rows,
+        series: [
+            TrendSeries(label: "net", values: networkHistory, accent: theme.palette.networkAccent),
+            TrendSeries(label: "io", values: diskHistory, accent: theme.palette.powerAccent)
+        ],
+        width: width,
+        height: height,
+        preferredStaticRows: isWide ? 3 : 2,
+        theme: theme
+    )
 }
 
 private func powerThermalPanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
-    isWide: Bool,
+    layoutMode: DashboardLayoutMode,
     theme: DashboardThemeContext
 ) -> [String] {
-    let batteryHistory = history.compactMap { $0.battery.percentage }
-    var rows = [
+    let isWide = layoutMode == .wide
+    let batteryHistory = history.compactMap(\.batteryPercentage)
+    guard layoutMode != .compact else {
+        var rows = [
+            theme.segment(fitLine("Battery \(formatOptionalPercent(sample.battery.percentage)) \(sample.battery.state)", width: width), foreground: theme.palette.powerAccent),
+            theme.segment(fitLine("Source \(sample.battery.powerSource)", width: width), foreground: theme.palette.detailAccent),
+            theme.segment(fitLine("Thermal \(sample.thermal.state)", width: width), foreground: theme.palette.warningAccent),
+            fitLine(theme.segment("batt ", foreground: theme.palette.powerAccent, bold: true) + trendStrip(values: batteryHistory, maxWidth: max(width - 5, 8), accent: theme.palette.powerAccent, theme: theme), width: width)
+        ]
+        if isWide {
+            rows.append(theme.segment(fitLine("Remaining \(sample.battery.timeRemaining ?? "n/a")", width: width), foreground: theme.palette.detailAccent))
+        }
+        return Array(rows.prefix(height))
+    }
+
+    let rows = [
         theme.segment(fitLine("Battery \(formatOptionalPercent(sample.battery.percentage)) \(sample.battery.state)", width: width), foreground: theme.palette.powerAccent),
         theme.segment(fitLine("Source \(sample.battery.powerSource)", width: width), foreground: theme.palette.detailAccent),
         theme.segment(fitLine("Thermal \(sample.thermal.state)", width: width), foreground: theme.palette.warningAccent),
-        fitLine(theme.segment("batt ", foreground: theme.palette.powerAccent, bold: true) + trendStrip(values: batteryHistory, maxWidth: max(width - 5, 8), accent: theme.palette.powerAccent, theme: theme), width: width)
+        theme.segment(fitLine("Remaining \(sample.battery.timeRemaining ?? "n/a")", width: width), foreground: theme.palette.detailAccent)
     ]
-    if isWide {
-        rows.append(theme.segment(fitLine("Remaining \(sample.battery.timeRemaining ?? "n/a")", width: width), foreground: theme.palette.detailAccent))
-    }
-    return Array(rows.prefix(height))
+    return panelRowsWithTrendSections(
+        staticRows: rows,
+        series: [TrendSeries(label: "battery", values: batteryHistory, accent: theme.palette.powerAccent)],
+        width: width,
+        height: height,
+        preferredStaticRows: isWide ? 4 : 3,
+        theme: theme
+    )
 }
 
 private func processListPanelRows(
@@ -1574,39 +1670,64 @@ private func fallbackLines(size: TerminalSize, status: String, theme: DashboardT
 
 private func powerTrendPanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
-    isWide: Bool,
+    layoutMode: DashboardLayoutMode,
     theme: DashboardThemeContext
 ) -> [String] {
-    var rows = [
-        theme.segment(fitLine("Pkg \(formatWatts(sample.cpu.packagePowerWatts))  GPU \(formatWatts(sample.gpu.powerWatts))  ANE \(formatWatts(sample.gpu.anePowerWatts))", width: width), foreground: theme.palette.powerAccent),
-        fitLine(theme.segment("cpu ", foreground: theme.palette.cpuAccent, bold: true) + trendStrip(values: history.compactMap { $0.cpu.packagePowerWatts }, maxWidth: max(width - 4, 8), accent: theme.palette.cpuAccent, theme: theme), width: width),
-        fitLine(theme.segment("gpu ", foreground: theme.palette.gpuAccent, bold: true) + trendStrip(values: history.compactMap { $0.gpu.powerWatts }, maxWidth: max(width - 4, 8), accent: theme.palette.gpuAccent, theme: theme), width: width),
-        fitLine(theme.segment("ane ", foreground: theme.palette.detailAccent, bold: true) + trendStrip(values: history.compactMap { $0.gpu.anePowerWatts }, maxWidth: max(width - 4, 8), accent: theme.palette.detailAccent, theme: theme), width: width)
-    ]
-    if isWide {
-        rows.append(theme.segment(fitLine("CPU total \(formatPercent(sample.totalCPUPercent))", width: width), foreground: theme.palette.detailAccent))
-    }
-    return Array(rows.prefix(height))
+    let staticRows = [
+        theme.segment(fitLine("Pkg \(formatWatts(sample.cpu.packagePowerWatts))  GPU \(formatWatts(sample.gpu.powerWatts))  ANE \(formatWatts(sample.gpu.anePowerWatts))", width: width), foreground: theme.palette.powerAccent)
+    ] + (layoutMode == .wide ? [theme.segment(fitLine("CPU total \(formatPercent(sample.totalCPUPercent))", width: width), foreground: theme.palette.detailAccent)] : [])
+
+    return panelRowsWithTrendSections(
+        staticRows: staticRows,
+        series: [
+            TrendSeries(label: "cpu", values: history.compactMap(\.cpuPackagePowerWatts), accent: theme.palette.cpuAccent),
+            TrendSeries(label: "gpu", values: history.compactMap(\.gpuPowerWatts), accent: theme.palette.gpuAccent),
+            TrendSeries(label: "ane", values: history.compactMap(\.anePowerWatts), accent: theme.palette.detailAccent)
+        ],
+        width: width,
+        height: height,
+        preferredStaticRows: 1,
+        theme: theme
+    )
 }
 
 private func batteryThermalPanelRows(
     sample: SampleEnvelope,
-    history: [SampleEnvelope],
+    history: [DashboardHistoryPoint],
     width: Int,
     height: Int,
+    layoutMode: DashboardLayoutMode,
     theme: DashboardThemeContext
 ) -> [String] {
     let batteryRatio = (sample.battery.percentage ?? 0) / 100
+    guard layoutMode == .compact else {
+        let rows = [
+            theme.segment(fitLine("Battery \(formatOptionalPercent(sample.battery.percentage)) \(sample.battery.state)", width: width), foreground: theme.palette.powerAccent),
+            theme.segment(fitLine("Thermal \(sample.thermal.state)", width: width), foreground: theme.palette.warningAccent),
+            theme.segment(fitLine("Source \(sample.battery.powerSource)", width: width), foreground: theme.palette.detailAccent),
+            metricGaugeLine(label: "BATT", value: formatOptionalPercent(sample.battery.percentage), ratio: batteryRatio, width: width, accent: theme.palette.powerAccent, theme: theme),
+            theme.segment(fitLine("Remaining \(sample.battery.timeRemaining ?? "n/a")", width: width), foreground: theme.palette.detailAccent)
+        ]
+        return panelRowsWithTrendSections(
+            staticRows: rows,
+            series: [TrendSeries(label: "battery", values: history.compactMap(\.batteryPercentage), accent: theme.palette.powerAccent)],
+            width: width,
+            height: height,
+            preferredStaticRows: 4,
+            theme: theme
+        )
+    }
+
     var rows = [
         theme.segment(fitLine("Battery \(formatOptionalPercent(sample.battery.percentage)) \(sample.battery.state)", width: width), foreground: theme.palette.powerAccent),
         metricGaugeLine(label: "BATT", value: formatOptionalPercent(sample.battery.percentage), ratio: batteryRatio, width: width, accent: theme.palette.powerAccent, theme: theme),
         theme.segment(fitLine("Thermal \(sample.thermal.state)", width: width), foreground: theme.palette.warningAccent),
         theme.segment(fitLine("Source \(sample.battery.powerSource)", width: width), foreground: theme.palette.detailAccent)
     ]
-    let batteryHistory = history.compactMap { $0.battery.percentage }
+    let batteryHistory = history.compactMap(\.batteryPercentage)
     if height > 4 {
         rows.append(fitLine(theme.segment("hist ", foreground: theme.palette.powerAccent, bold: true) + trendStrip(values: batteryHistory, maxWidth: max(width - 5, 8), accent: theme.palette.powerAccent, theme: theme), width: width))
     }
@@ -1868,15 +1989,33 @@ private func panelBottomBorder(width: Int, theme: DashboardThemeContext) -> Stri
         + theme.segment("┘", foreground: theme.palette.panelBorder)
 }
 
+private struct ChartHeightPolicy {
+    var minimum: Int
+    var target: Int
+}
+
+private struct TrendSeries {
+    var label: String
+    var values: [Double]
+    var accent: ANSIColor?
+}
+
 private func panelRowsWithChart(
     staticRows: [String],
     chartValues: [Double],
     width: Int,
     height: Int,
+    layoutMode: DashboardLayoutMode,
     accent: ANSIColor? = nil,
     theme: DashboardThemeContext? = nil
 ) -> [String] {
-    let chartHeight = max(min(height - min(staticRows.count, max(height - 1, 1)), 4), 1)
+    guard height > 0 else {
+        return []
+    }
+    let policy = chartHeightPolicy(for: layoutMode)
+    let minimumChartHeight = min(policy.minimum, height)
+    let reservedStaticRows = min(min(2, staticRows.count), max(height - minimumChartHeight, 0))
+    let chartHeight = max(minimumChartHeight, min(policy.target, height - reservedStaticRows))
     let visibleStatic = Array(staticRows.prefix(max(height - chartHeight, 0)))
     return visibleStatic + trendChart(
         values: chartValues,
@@ -1914,6 +2053,121 @@ private func distributeHeights(total: Int, count: Int) -> [Int] {
     return heights
 }
 
+private func compactPowerPanelHeights(total: Int) -> [Int] {
+    guard total > 0 else { return [] }
+    let trendHeight = max(Int(round(Double(total) * 3.0 / 7.0)), 1)
+    let remainder = max(total - trendHeight, 0)
+    let secondary = distributeHeights(total: remainder, count: 2)
+    if secondary.count == 2 {
+        return [trendHeight, secondary[0], secondary[1]]
+    }
+    return [trendHeight, max(remainder, 1), 1]
+}
+
+private func chartHeightPolicy(for mode: DashboardLayoutMode) -> ChartHeightPolicy {
+    switch mode {
+    case .compact:
+        return ChartHeightPolicy(minimum: 2, target: 2)
+    case .medium:
+        return ChartHeightPolicy(minimum: 4, target: 5)
+    case .wide:
+        return ChartHeightPolicy(minimum: 6, target: 7)
+    case .fallback:
+        return ChartHeightPolicy(minimum: 1, target: 1)
+    }
+}
+
+private func panelRowsWithTrendSections(
+    staticRows: [String],
+    series: [TrendSeries],
+    width: Int,
+    height: Int,
+    preferredStaticRows: Int,
+    theme: DashboardThemeContext
+) -> [String] {
+    guard height > 0 else {
+        return []
+    }
+
+    guard series.isEmpty == false else {
+        return Array(staticRows.prefix(height))
+    }
+
+    let minimumTrendHeight = min(height, max(series.count * 2, 1))
+    let reservedStaticRows = min(min(preferredStaticRows, staticRows.count), max(height - minimumTrendHeight, 0))
+    let trendHeight = max(minimumTrendHeight, height - reservedStaticRows)
+    let visibleStatic = Array(staticRows.prefix(max(height - trendHeight, 0)))
+    return visibleStatic + stackedTrendRows(series: series, width: width, height: trendHeight, theme: theme)
+}
+
+private func stackedTrendRows(
+    series: [TrendSeries],
+    width: Int,
+    height: Int,
+    theme: DashboardThemeContext
+) -> [String] {
+    guard height > 0 else {
+        return []
+    }
+
+    guard series.isEmpty == false else {
+        return []
+    }
+
+    if height < series.count * 2 {
+        return Array(series.prefix(height).map { trendStripRow(series: $0, width: width, theme: theme) })
+    }
+
+    let sectionHeights = distributeHeights(total: height, count: series.count)
+    return Array(
+        series.enumerated().flatMap { index, item in
+            trendSectionRows(series: item, width: width, height: sectionHeights[index], theme: theme)
+        }
+        .prefix(height)
+    )
+}
+
+private func trendSectionRows(
+    series: TrendSeries,
+    width: Int,
+    height: Int,
+    theme: DashboardThemeContext
+) -> [String] {
+    guard height > 0 else {
+        return []
+    }
+
+    guard height > 1 else {
+        return [trendStripRow(series: series, width: width, theme: theme)]
+    }
+
+    let header = theme.segment(fitLine(series.label, width: width), foreground: series.accent, bold: true)
+    return [header] + trendChart(
+        values: series.values,
+        width: width,
+        height: height - 1,
+        accent: series.accent,
+        theme: theme
+    )
+}
+
+private func trendStripRow(
+    series: TrendSeries,
+    width: Int,
+    theme: DashboardThemeContext
+) -> String {
+    let prefix = theme.segment("\(series.label) ", foreground: series.accent, bold: true)
+    return fitLine(
+        prefix + trendStrip(
+            values: series.values,
+            maxWidth: max(width - (series.label.count + 1), 1),
+            accent: series.accent,
+            theme: theme
+        ),
+        width: width
+    )
+}
+
 private func trendChart(
     values: [Double],
     width: Int,
@@ -1937,22 +2191,29 @@ private func trendChart(
         return emptyRows + [renderedLabel]
     }
 
+    let glyphs = Array("▁▂▃▄▅▆▇█")
     let reduced = Array(values.suffix(width))
     let maxValue = reduced.max() ?? 0
     let minValue = reduced.min() ?? 0
     let range = maxValue - minValue
     let levels: [Int]
     if range < 0.0001 {
-        let flatLevel = maxValue > 0 ? max(1, height / 2) : 0
-        levels = Array(repeating: flatLevel, count: reduced.count)
+        let flatUnits = maxValue > 0 ? max(height * 4, 1) : 0
+        levels = Array(repeating: flatUnits, count: reduced.count)
     } else {
         levels = reduced.map { value in
-            Int(round(((value - minValue) / range) * Double(height)))
+            let normalized = (value - minValue) / range
+            return min(max(Int(round(normalized * Double(height * 8))), 0), height * 8)
         }
     }
 
-    return stride(from: height, through: 1, by: -1).map { row in
-        let line = levels.map { $0 >= row ? "█" : " " }.joined()
+    return (0..<height).map { topRow in
+        let rowBase = (height - topRow - 1) * 8
+        let line = levels.map { units -> String in
+            let rowUnits = max(min(units - rowBase, 8), 0)
+            guard rowUnits > 0 else { return " " }
+            return String(glyphs[rowUnits - 1])
+        }.joined()
         let padded = padOrTrim(line, width: width)
         if let accent, let theme {
             return theme.segment(padded, foreground: accent)
@@ -2015,9 +2276,13 @@ private func gaugeBar(
         return ""
     }
     let clamped = min(max(ratio, 0), 1)
-    let filled = min(max(Int(round(clamped * Double(width))), 0), width)
-    let filledBar = String(repeating: "█", count: filled)
-    let emptyBar = String(repeating: "░", count: max(width - filled, 0))
+    let partialGlyphs = Array("▏▎▍▌▋▊▉")
+    let filledUnits = min(max(Int(round(clamped * Double(width * 8))), 0), width * 8)
+    let fullBlocks = min(filledUnits / 8, width)
+    let partialUnits = min(max(filledUnits % 8, 0), partialGlyphs.count)
+    let partialBlock = fullBlocks < width && partialUnits > 0 ? String(partialGlyphs[partialUnits - 1]) : ""
+    let filledBar = String(repeating: "█", count: fullBlocks) + partialBlock
+    let emptyBar = String(repeating: "░", count: max(width - fullBlocks - partialBlock.count, 0))
     if let accent, let theme {
         return theme.segment(filledBar, foreground: accent, bold: true)
             + theme.segment(emptyBar, foreground: theme.palette.gaugeTrack)
