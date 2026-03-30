@@ -32,3 +32,22 @@ import Testing
 
     #expect(resolver.resolve(.auto) == .light)
 }
+
+@Test func appConfigDefaultsDashboardThemeToAuto() {
+    #expect(AppConfig.default.theme == .auto)
+}
+
+@Test func missingAppleInterfaceStyleMeansLightModeForSystemTheme() {
+    #expect(resolvedSystemThemeForSystemPreferences(nil) == .light)
+    #expect(
+        resolvedSystemTheme(
+            appleInterfaceStyle: nil,
+            appKitAppearanceName: .darkAqua
+        ) == .dark
+    )
+}
+
+@Test func systemPreferenceSnapshotResolvesDarkAndLightModes() {
+    #expect(resolvedSystemThemeForSystemPreferences("Dark") == .dark)
+    #expect(resolvedSystemThemeForSystemPreferences(nil) == .light)
+}

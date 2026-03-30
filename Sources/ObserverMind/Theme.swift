@@ -11,10 +11,7 @@ struct DashboardAppearanceProvider: Sendable {
 }
 
 func currentSystemTheme() -> ResolvedDashboardTheme? {
-    resolvedSystemTheme(
-        appleInterfaceStyle: currentAppleInterfaceStyle(),
-        appKitAppearanceName: currentAppKitAppearanceName()
-    )
+    resolvedSystemThemeForSystemPreferences(currentAppleInterfaceStyle())
 }
 
 func resolvedSystemTheme(
@@ -54,6 +51,10 @@ func resolvedSystemTheme(forAppleInterfaceStyle style: String?) -> ResolvedDashb
     return trimmedStyle.caseInsensitiveCompare("Dark") == .orderedSame ? .dark : .light
 }
 
+func resolvedSystemThemeForSystemPreferences(_ style: String?) -> ResolvedDashboardTheme {
+    resolvedSystemTheme(forAppleInterfaceStyle: style) ?? .light
+}
+
 func currentAppKitAppearanceName() -> NSAppearance.Name? {
     guard Thread.isMainThread else {
         return nil
@@ -87,7 +88,6 @@ private func currentAppleInterfaceStyle() -> String? {
 
     return nil
 }
-
 enum ResolvedDashboardTheme: String, Sendable {
     case light
     case dark

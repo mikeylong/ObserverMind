@@ -12,7 +12,7 @@ struct AppConfig: Codable, Sendable {
     var theme: DashboardTheme?
     var thresholds = ThresholdConfig()
 
-    static let `default` = AppConfig(theme: nil, thresholds: ThresholdConfig())
+    static let `default` = AppConfig(theme: .auto, thresholds: ThresholdConfig())
 }
 
 enum AppConfigLoader {

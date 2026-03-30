@@ -300,6 +300,56 @@ import Testing
     #expect(autoLightOutput == explicitLightOutput)
 }
 
+@Test func autoThemeRespondsToSuccessiveProviderChangesWithoutRebuildingState() {
+    let sample = makeSample()
+    let size = TerminalSize(width: 96, height: 24)
+    let state = DashboardRenderState(
+        view: .overview,
+        processSort: .cpu,
+        selectionIndex: 0,
+        processScrollOffset: 0,
+        networkScrollOffset: 0,
+        theme: .auto
+    )
+    let themeBox = MutableResolvedThemeBox(.light)
+    let appearanceProvider = DashboardAppearanceProvider { themeBox.theme }
+
+    let firstOutput = DashboardRenderer.render(
+        sample: sample,
+        history: [sample],
+        state: state,
+        size: size,
+        status: "ok",
+        appearanceProvider: appearanceProvider
+    )
+    themeBox.theme = .dark
+    let secondOutput = DashboardRenderer.render(
+        sample: sample,
+        history: [sample],
+        state: state,
+        size: size,
+        status: "ok",
+        appearanceProvider: appearanceProvider
+    )
+    let explicitLightOutput = DashboardRenderer.render(
+        sample: sample,
+        history: [sample],
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .light),
+        size: size,
+        status: "ok"
+    )
+    let explicitDarkOutput = DashboardRenderer.render(
+        sample: sample,
+        history: [sample],
+        state: DashboardRenderState(view: .overview, processSort: .cpu, selectionIndex: 0, processScrollOffset: 0, networkScrollOffset: 0, theme: .dark),
+        size: size,
+        status: "ok"
+    )
+
+    #expect(firstOutput == explicitLightOutput)
+    #expect(secondOutput == explicitDarkOutput)
+}
+
 @Test func renderUsesCommittedLayoutWhileViewportIsChanging() {
     let sample = makeSample()
     let output = DashboardRenderer.render(
@@ -652,4 +702,12 @@ private func histogramLineCount(_ output: String) -> Int {
 
 private func panelStartIndex(_ lines: [String], title: String) -> Int? {
     lines.firstIndex { $0.contains(title) }
+}
+
+private final class MutableResolvedThemeBox: @unchecked Sendable {
+    var theme: ResolvedDashboardTheme?
+
+    init(_ theme: ResolvedDashboardTheme?) {
+        self.theme = theme
+    }
 }

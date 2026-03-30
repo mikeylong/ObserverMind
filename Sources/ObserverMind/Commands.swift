@@ -36,7 +36,7 @@ public struct DashboardCommand: ParsableCommand {
     @Option(name: .long, help: "Sampling interval in seconds.")
     var interval: Int = 1
 
-    @Option(name: .long, help: "Dashboard theme.")
+    @Option(name: .long, help: "Dashboard theme. Defaults to auto.")
     var theme: DashboardTheme?
 
     public init() {}
