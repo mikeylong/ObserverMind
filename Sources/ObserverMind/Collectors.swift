@@ -33,21 +33,26 @@ struct ProcessCommandRunner: CommandRunning, Sendable {
         }
 
         let process = Process()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
+        let stdoutCapture = try TemporaryCommandCapture(prefix: "stdout")
+        let stderrCapture = try TemporaryCommandCapture(prefix: "stderr")
+        defer {
+            stdoutCapture.cleanup()
+            stderrCapture.cleanup()
+        }
+
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.standardInput = FileHandle.nullDevice
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+        process.standardOutput = stdoutCapture.handle
+        process.standardError = stderrCapture.handle
         try process.run()
+        try? stdoutCapture.handle.close()
+        try? stderrCapture.handle.close()
         process.waitUntilExit()
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
         let result = CommandResult(
-            stdout: String(decoding: stdoutData, as: UTF8.self),
-            stderr: String(decoding: stderrData, as: UTF8.self),
+            stdout: try stdoutCapture.readString(),
+            stderr: try stderrCapture.readString(),
             exitCode: process.terminationStatus
         )
 
@@ -55,6 +60,34 @@ struct ProcessCommandRunner: CommandRunning, Sendable {
             throw CommandRunnerError.nonZeroExit(executable, result.exitCode, result.stderr)
         }
         return result
+    }
+}
+
+private struct TemporaryCommandCapture {
+    let url: URL
+    let handle: FileHandle
+
+    init(prefix: String) throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+        let filename = "ObserverMind-\(prefix)-\(UUID().uuidString).log"
+        let url = directory.appendingPathComponent(filename)
+
+        guard fileManager.createFile(atPath: url.path, contents: nil) else {
+            throw RuntimeError("Unable to create temporary capture file.")
+        }
+
+        self.url = url
+        self.handle = try FileHandle(forWritingTo: url)
+    }
+
+    func readString() throws -> String {
+        String(decoding: try Data(contentsOf: url), as: UTF8.self)
+    }
+
+    func cleanup() {
+        try? handle.close()
+        try? FileManager.default.removeItem(at: url)
     }
 }
 

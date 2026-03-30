@@ -1,15 +1,91 @@
+import AppKit
+import CoreFoundation
 import Foundation
 
 struct DashboardAppearanceProvider: Sendable {
-    var appleInterfaceStyle: @Sendable () -> String?
+    var resolvedSystemTheme: @Sendable () -> ResolvedDashboardTheme?
 
     static let live = DashboardAppearanceProvider {
-        if let globalDefaults = UserDefaults(suiteName: UserDefaults.globalDomain),
-           let style = globalDefaults.string(forKey: "AppleInterfaceStyle") {
-            return style
-        }
-        return UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
+        currentSystemTheme()
     }
+}
+
+func currentSystemTheme() -> ResolvedDashboardTheme? {
+    resolvedSystemTheme(
+        appleInterfaceStyle: currentAppleInterfaceStyle(),
+        appKitAppearanceName: currentAppKitAppearanceName()
+    )
+}
+
+func resolvedSystemTheme(
+    appleInterfaceStyle: String?,
+    appKitAppearanceName: NSAppearance.Name?
+) -> ResolvedDashboardTheme? {
+    if let theme = resolvedSystemTheme(forAppleInterfaceStyle: appleInterfaceStyle) {
+        return theme
+    }
+
+    if let theme = resolvedSystemTheme(for: appKitAppearanceName) {
+        return theme
+    }
+    
+    return nil
+}
+
+func resolvedSystemTheme(for appearanceName: NSAppearance.Name?) -> ResolvedDashboardTheme? {
+    switch appearanceName {
+    case .darkAqua:
+        return .dark
+    case .aqua:
+        return .light
+    case nil:
+        return nil
+    default:
+        return nil
+    }
+}
+
+func resolvedSystemTheme(forAppleInterfaceStyle style: String?) -> ResolvedDashboardTheme? {
+    let trimmedStyle = style?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let trimmedStyle, trimmedStyle.isEmpty == false else {
+        return nil
+    }
+
+    return trimmedStyle.caseInsensitiveCompare("Dark") == .orderedSame ? .dark : .light
+}
+
+func currentAppKitAppearanceName() -> NSAppearance.Name? {
+    guard Thread.isMainThread else {
+        return nil
+    }
+
+    return MainActor.assumeIsolated {
+        NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+    }
+}
+
+private func currentAppleInterfaceStyle() -> String? {
+    _ = CFPreferencesSynchronize(
+        kCFPreferencesAnyApplication,
+        kCFPreferencesCurrentUser,
+        kCFPreferencesAnyHost
+    )
+
+    if let style = CFPreferencesCopyValue(
+        "AppleInterfaceStyle" as CFString,
+        kCFPreferencesAnyApplication,
+        kCFPreferencesCurrentUser,
+        kCFPreferencesAnyHost
+    ) as? String {
+        return style
+    }
+
+    if let globalDefaults = UserDefaults.standard.persistentDomain(forName: UserDefaults.globalDomain),
+       let style = globalDefaults["AppleInterfaceStyle"] as? String {
+        return style
+    }
+
+    return nil
 }
 
 enum ResolvedDashboardTheme: String, Sendable {
@@ -27,8 +103,7 @@ struct DashboardThemeResolver: Sendable {
         case .dark:
             return .dark
         case .auto:
-            let style = appearanceProvider.appleInterfaceStyle()?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return style?.caseInsensitiveCompare("Dark") == .orderedSame ? .dark : .light
+            return appearanceProvider.resolvedSystemTheme() ?? .light
         }
     }
 }

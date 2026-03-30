@@ -246,7 +246,7 @@ import Testing
 @Test func autoThemeFollowsInjectedAppearanceProvider() {
     let sample = makeSample()
     let size = TerminalSize(width: 96, height: 24)
-    let darkProvider = DashboardAppearanceProvider { "Dark" }
+    let darkProvider = DashboardAppearanceProvider { .dark }
     let lightProvider = DashboardAppearanceProvider { nil }
 
     let autoDarkOutput = DashboardRenderer.render(
