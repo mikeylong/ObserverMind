@@ -48,8 +48,12 @@ jobs:
         swift build -c release --product observer
         BIN_PATH="$(swift build -c release --show-bin-path)"
         ARCH="$(uname -m)"
-        ARTIFACT="observer-${{ steps.version.outputs.tag }}-macos-${ARCH}.zip"
-        ditto -c -k --sequesterRsrc --keepParent "${BIN_PATH}/observer" "${ARTIFACT}"
+        STAGING_DIR="observer-${{ steps.version.outputs.tag }}-macos-${ARCH}"
+        ARTIFACT="${STAGING_DIR}.zip"
+        mkdir -p "${STAGING_DIR}"
+        cp "${BIN_PATH}/observer" "${STAGING_DIR}/observer"
+        printf '%s\n' "${{ steps.version.outputs.tag }}" > "${STAGING_DIR}/observer.version"
+        ditto -c -k --sequesterRsrc --keepParent "${STAGING_DIR}" "${ARTIFACT}"
         echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
     - name: Create GitHub release
       env:

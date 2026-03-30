@@ -5,6 +5,7 @@ public struct ObserverCLI: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "observer",
         abstract: "CLI-based monitoring cockpit for Apple Silicon Macs.",
+        version: ObserverVersion.current,
         subcommands: [
             DashboardCommand.self,
             SnapshotCommand.self,
